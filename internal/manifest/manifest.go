@@ -11,6 +11,8 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/Sanilas-ai/toolchain-verify/internal/agent"
+	"github.com/Sanilas-ai/toolchain-verify/internal/dockerhost"
+	"github.com/Sanilas-ai/toolchain-verify/internal/execlint"
 	"github.com/Sanilas-ai/toolchain-verify/internal/version"
 )
 
@@ -25,6 +27,10 @@ type Manifest struct {
 	Tools            []Tool `toml:"tool"`
 	// Agent configures `toolchain-verify agent` (agent-protection checks).
 	Agent *agent.Policy `toml:"agent"`
+	// ExecLint configures `toolchain-verify exec-lint`.
+	ExecLint *execlint.Policy `toml:"exec_lint"`
+	// Docker configures `toolchain-verify docker` (host hygiene).
+	Docker *dockerhost.Policy `toml:"docker"`
 
 	// Dir is the directory containing the manifest (not part of the file).
 	Dir string `toml:"-"`
@@ -80,11 +86,21 @@ func Parse(data []byte) (*Manifest, error) {
 		}
 		return nil, fmt.Errorf("unknown keys: %s", strings.Join(keys, ", "))
 	}
-	if len(m.Tools) == 0 && m.Agent == nil {
-		return nil, fmt.Errorf("no [[tool]] entries and no [agent] section")
+	if len(m.Tools) == 0 && m.Agent == nil && m.ExecLint == nil && m.Docker == nil {
+		return nil, fmt.Errorf("no [[tool]] entries and no [agent], [exec_lint] or [docker] section")
 	}
 	if m.Agent != nil {
 		if err := m.Agent.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if m.ExecLint != nil {
+		if err := m.ExecLint.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if m.Docker != nil {
+		if err := m.Docker.Validate(); err != nil {
 			return nil, err
 		}
 	}

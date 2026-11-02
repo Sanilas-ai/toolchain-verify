@@ -100,13 +100,53 @@ It never executes binaries, never opens credential files and never prints file c
   (`require_container = true`).
 - The advisory DB is only as fresh as its `updated` date; add local entries for new issues.
 
+## Code-exec isolation lint (`toolchain-verify exec-lint`)
+
+Threat: an agent or tool feeds model output (possibly steered by prompt injection from a web page,
+issue or file) into `subprocess`, `exec.Command`, `child_process` or `eval`. Without isolation that is
+remote code execution with the user's privileges, network and credentials.
+
+Approach: a static, line-oriented scan (no AST, no execution). A file is in **LLM context** when it
+imports an LLM/agent SDK, calls a known chat-completions endpoint, contains an
+`extra_llm_markers` literal, or uses at least two distinct LLM identifiers (`llm`, `tool_calls`,
+`generated_code`, `prompt`, ...). Only exec sinks in such files are reported, which keeps build scripts
+and CLIs quiet. A sink is accepted when, within 8 lines before / 15 after, an approved wrapper is named,
+when a `docker|podman run` invocation (or `containers.run(...)` from the Docker SDK) has all of
+`--network none`, `--read-only`, `--cap-drop ALL` and a non-root `--user` (flags may be built elsewhere
+in the same file), or when a `toolchain-verify:sandboxed` comment marks a reviewed call.
+`--privileged`, `--pid host`, `--network host` and Docker socket mounts make the sandbox a fail.
+
+Limits: no data-flow analysis (a sink in an LLM file is assumed to receive model output; a sink fed
+by model output in another file is missed); annotations and wrapper names are trusted; language
+coverage is Go, Python, JS/TS and shell; minified lines over 4 KiB are skipped.
+
+## Docker host hygiene (`toolchain-verify docker`)
+
+Threats: containers reachable from the LAN despite ufw (Docker writes its own iptables rules), container
+escapes via `--privileged`, host namespaces, dangerous capabilities or a mounted engine socket, silent
+image changes through `:latest`, local privilege escalation through `docker` group membership or an
+unauthenticated TCP daemon, and exfiltration from agent stacks that have unrestricted egress.
+
+Safety properties: reads `daemon.json` and `docker.service` units (256 KiB max), stats the socket and
+queries the **local** Engine API with GET only; container IDs are validated (`[0-9a-f]{12,64}`) before
+being used in a URL; remote `DOCKER_HOST` values are reported, never contacted; environment values of
+containers are never requested or printed. Nothing is started, stopped, pulled or changed.
+
+Limits: egress is judged by network attachment (`none`, internal networks), not by firewall rules or
+proxies; image tags are not resolved against a registry; Kubernetes, containerd without Docker API and
+rootless engines of other users are not inspected.
+
 ## Layout
 
 - `internal/version` — parse/extract versions, compare, constraint grammar.
 - `internal/manifest` — strict TOML loading and validation.
 - `internal/check` — locate, resolve symlinks, hash, probe, report.
 - `internal/agent` — agent-protection audit: policy, instruction files, inventory, advisories, MCP, credentials, supply chain.
-- `cmd/toolchain-verify` — CLI (`check`, `agent`/`protect`, `init`, `version`).
+- `internal/execlint` — code-exec isolation lint.
+- `internal/dockerhost` — Docker/Podman host hygiene (GET-only Engine API client).
+- `internal/findings` — shared finding/collector model for the new audits.
+- `sandbox` — public Go helper that builds hardened `docker run` invocations.
+- `cmd/toolchain-verify` — CLI (`check`, `agent`/`protect`, `exec-lint`, `docker`, `init`, `version`).
 
 ## Possible next steps
 
