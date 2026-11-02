@@ -15,7 +15,7 @@ func TestSampleManifestParses(t *testing.T) {
 	if _, err := manifest.Parse([]byte(sample)); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"../../examples/toolchain.toml", "../../examples/oss-sandbox.toml", "../../examples/agent-protect.toml", "../../examples/agent-hp.toml"} {
+	for _, f := range []string{"../../examples/toolchain.toml", "../../examples/oss-sandbox.toml", "../../examples/agent-protect.toml", "../../examples/agent-hp.toml", "../../examples/models-hp.toml"} {
 		if _, err := manifest.Load(f); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}
@@ -198,5 +198,50 @@ func TestAgentPreSessionQuarantineAndQuiet(t *testing.T) {
 	}
 	if code := run(append(base, "--cwd", proj, "--quarantine-dir", qdir), &out, &errb); code != 2 {
 		t.Errorf("--quarantine-dir alone: exit %d", code)
+	}
+}
+
+func TestModelsCommand(t *testing.T) {
+	dir := t.TempDir()
+	// proto 2 pickle calling os.system; never loaded, only opcode-scanned
+	os.WriteFile(filepath.Join(dir, "evil.pkl"), []byte("\x80\x02cos\nsystem\nq\x00X\x02\x00\x00\x00idq\x01\x85q\x02Rq\x03."), 0o644)
+	os.WriteFile(filepath.Join(dir, "data.pkl"), []byte("\x80\x02}q\x00."), 0o644)
+	var out, errb bytes.Buffer
+	// flags after paths work too
+	if code := run([]string{"models", "--no-ollama", "--external", "off", dir, "--json"}, &out, &errb); code != 1 {
+		t.Fatalf("models: code %d\n%s\n%s", code, out.String(), errb.String())
+	}
+	var rep struct {
+		OK        bool `json:"ok"`
+		Artifacts []struct {
+			Path, SHA256, Format string
+		} `json:"artifacts"`
+		Findings []struct{ Rule, Severity, Path string } `json:"findings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
+		t.Fatalf("json: %v\n%s", err, out.String())
+	}
+	if rep.OK || len(rep.Artifacts) != 2 || rep.Artifacts[0].SHA256 == "" {
+		t.Fatalf("report: %+v", rep)
+	}
+	found := false
+	for _, f := range rep.Findings {
+		if f.Rule == "models.pickle-dangerous" && strings.HasSuffix(f.Path, "evil.pkl") && f.Severity == "fail" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no pickle-dangerous: %+v", rep.Findings)
+	}
+	os.Remove(filepath.Join(dir, "evil.pkl"))
+	out.Reset()
+	if code := run([]string{"models", "--no-ollama", "--external", "off", "-q", dir}, &out, &errb); code != 0 {
+		t.Fatalf("clean dir: code %d\n%s", code, out.String())
+	}
+	if code := run([]string{"models", "--no-ollama", "--external", "off", "--strict", dir}, &out, &errb); code != 1 {
+		t.Fatalf("strict should fail on the pickle warning: %d", code)
+	}
+	if code := run([]string{"models", "--no-ollama", "/"}, &out, &errb); code != 2 {
+		t.Fatalf("/ should be refused with code 2, got %d", code)
 	}
 }

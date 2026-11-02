@@ -288,6 +288,14 @@ func TestSupplyChainConfig(t *testing.T) {
 		t.Errorf("credentials in index URL must be redacted: %s", f.Message)
 	}
 	mustHave(t, rep, "supply.pickle-model", "model.pt", SevWarn)
+	// content-aware: a .bin that is safetensors is fine, a .bin that is a pickle is not
+	write(t, filepath.Join(e.downloads, "st.bin"), "\x10\x00\x00\x00\x00\x00\x00\x00{\"__metadata__\":{}}", 0o644)
+	write(t, filepath.Join(e.downloads, "pytorch_model.bin"), "\x80\x02}q\x00.", 0o644)
+	write(t, filepath.Join(e.downloads, "weights.npy"), "\x93NUMPY\x01\x00\x76\x00{'descr': '<f4', 'fortran_order': False, 'shape': (0,), }", 0o644)
+	rep = e.run(t, e.policy(), e.polygon, true)
+	mustHave(t, rep, "supply.pickle-model", "pytorch_model.bin", SevWarn)
+	mustNot(t, rep, "supply.pickle-model", "st.bin")
+	mustNot(t, rep, "supply.pickle-model", "weights.npy")
 
 	off := false
 	p := e.policy()

@@ -58,7 +58,7 @@ It never executes binaries, never opens credential files and never prints file c
 | MCP configs living in untrusted dirs | `mcp.untrusted-location` |
 | Credential theft by an agent or a co-tenant: loose permissions on tokens and keys | `cred.perms`, `cred.owner`, `cred.env` (env var names only) |
 | Dependency confusion and MITM in package indexes | `supply.extra-index`, `supply.cleartext-index`, `supply.trusted-host` (pip.conf, uv.toml, `PIP_*`/`UV_*` env) |
-| Pickle-based model files from untrusted sources (arbitrary code on load) | `supply.pickle-model` (`.pkl`, `.pickle`, `.pt`, `.pth`-model, `.bin`, `.ckpt`, `.joblib` in untrusted dirs) |
+| Pickle-based model files from untrusted sources (arbitrary code on load) | `supply.pickle-model` (pickle-capable names in untrusted dirs, confirmed by content sniffing: a `.bin` that is safetensors is not flagged; deep checks live in `toolchain-verify models`) |
 | `.pth` startup hooks executing code at every Python start | `supply.pth-exec` (allowlist for well-known ones) |
 
 ### Safety properties of the scanner itself
@@ -91,8 +91,8 @@ It never executes binaries, never opens credential files and never prints file c
   tag only; layers are not unpacked.
 - No content-type detection (Magika-style) and no archive unpacking: a malicious
   `AGENTS.md` inside a `.zip` in Downloads is not seen until extracted.
-- Pickle detection is by extension in untrusted dirs only; no opcode scanning, no
-  safetensors verification, no Hugging Face/plugin signature checks.
+- `supply.pickle-model` sniffs content but only reports; opcode scanning, safetensors/GGUF
+  checks and hashing are in `toolchain-verify models`. No Hugging Face/plugin signature checks.
 - No VS Code / Cursor extension audit, no npm lifecycle-script audit, no project `.npmrc` parsing.
 - Docker image tags are compared, not digests; registry provenance is not verified.
 - Heuristic content labels have false positives and negatives; they are hints, not a sandbox.
@@ -214,6 +214,59 @@ Fail-closed: unparsable input, an unknown hook payload or a missing policy block
 - Glob patterns over joined arguments are heuristics (`*--privileged*`).
 - Inside the sandbox (`/.dockerenv`) everything but `everywhere` rules is allowed.
 
+## Model artifact scan (`toolchain-verify models`)
+
+A read-only inventory and integrity check of model files on a workstation: what is there
+(path, size, SHA-256, format), which files can run code when loaded, and whether the Ollama
+store is consistent with its manifests and the running API.
+
+### Threats → rules
+
+| Threat | Rule(s) |
+|---|---|
+| Pickle payload that runs code on `pickle.load` / `torch.load(weights_only=False)` / `joblib.load` | `models.pickle-dangerous` (fail: imports such as `os.system`, `builtins.eval`/`exec`/`getattr`, `subprocess`, `socket`, `runpy`, `torch.hub`, any dunder) |
+| Pickle with classes nobody reviewed | `models.pickle-unknown-import` (`unknown_import`, default warn) |
+| Pickle-capable format at all (could be swapped later) | `models.pickle` (`pickle`, default warn; info under `trusted` globs or `allow`) |
+| Scanner evasion by truncation / unsupported compression | `models.pickle-incomplete` |
+| Header/offset tricks in safetensors and GGUF (parser bugs, OOB reads) | `models.safetensors-malformed`, `models.gguf-malformed`, `models.malformed` |
+| GGUF chat-template SSTI (CVE-2024-34359, llama-cpp-python) | `models.gguf-template` (fail on `__class__`/`__globals__`/…, warn on `attr` filters) |
+| Keras `Lambda` layers (arbitrary Python on load) | `models.keras-lambda` |
+| A reviewed file silently replaced | `models.digest-mismatch` (`allow` with a literal path pins SHA-256; HF cache blobs are checked against their names) |
+| Writable model dirs / blob store | `models.writable`, `ollama.writable` |
+| Broken or tampered Ollama store | `ollama.blob-missing`, `ollama.blob-size`, `ollama.blob-digest` (`--verify-blobs`), `ollama.manifest-escape`, `ollama.manifest-invalid` |
+| Model served by an instance whose store we did not see | `ollama.api-unmatched`, `ollama.store-not-found`, `ollama.api-remote` |
+| Provenance hints | `ollama.third-party`, `ollama.variant-not-pulled`, `ollama.orphan-blobs`, `ollama.partial`, `ollama.digest-unverified` |
+| Identity key readable by others | `ollama.key-perms` (stat only) |
+| Second opinion | `models.scanner` / `models.scanner-error` / `models.scanner-missing` (picklescan, modelscan) |
+
+### Safety properties
+
+- **Never unpickles.** The pickle walker models the VM stack and memo for protocols 0–5 to
+  resolve `GLOBAL`/`INST`/`STACK_GLOBAL`/`EXT*` names; it executes nothing, bounds stack,
+  memo, string sizes and pickle count, and stops on the first malformed opcode while
+  keeping what it found. Legacy torch files (several pickles + raw storage) are handled.
+- Read-only: files are opened `O_RDONLY`; nothing is written, moved or downloaded. Scan
+  roots of `/` are refused; `.git`, `node_modules`, `.ssh`, `.gnupg` are skipped.
+- Ollama: only `GET /api/version` and `GET /api/tags`, no redirects, no proxy, 8 MiB cap,
+  credentials in the URL rejected. Only `manifests*/` and `blobs/` are read; the identity
+  key next to the store is `stat`-ed, never opened. Weight blobs are parsed (header only)
+  but re-hashed only with `--verify-blobs`.
+- External scanners run with a minimal environment (`PATH`, `HOME`, `LANG`, `NO_COLOR`), a
+  timeout and no stdin; they are never installed by the tool.
+- Output contains paths, digests, sizes, import names and finding text — never file contents,
+  template bodies or API tokens.
+
+### Limits
+
+- The safe/dangerous import lists are heuristic (cf. picklescan). An "unknown" import is
+  not proof of malice and a "safe" one is not proof of safety; data-only verdicts hold for
+  the scanned bytes only — pin them with `allow`.
+- Joblib inline numpy arrays are skipped by length heuristics; xz/lz4-compressed joblib is
+  reported as not parsed. Duplicate JSON keys in safetensors headers are not detected.
+- ONNX, HDF5/`.h5`, TFLite, CTranslate2 `.bin` are inventoried and hashed but not parsed.
+- GGUF v1 is not structure-checked; unknown ggml types skip the tensor-size check.
+- Ollama blobs are trusted by name unless `--verify-blobs` (reads every byte; on HP ~112 GiB).
+
 ## Layout
 
 - `internal/version` — parse/extract versions, compare, constraint grammar.
@@ -226,7 +279,8 @@ Fail-closed: unparsable input, an unknown hook payload or a missing policy block
 - `sandbox` — public Go helper that builds hardened `docker run` invocations.
 - `internal/hostsec` — host audit: dpkg versions, apt lists, unattended-upgrades, kernel floors, snaps, `/proc/net` and `ss` parsing, ufw rules/status, reconciliation.
 - `internal/execpolicy` — shell command splitter and host-vs-sandbox policy decisions.
-- `cmd/toolchain-verify` — CLI (`check`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `init`, `version`).
+- `internal/models` — model artifact scan: format sniffing, pickle opcode walk, safetensors/GGUF checks, Ollama store/API report, external scanners.
+- `cmd/toolchain-verify` — CLI (`check`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `models`, `init`, `version`).
 
 ## Possible next steps
 

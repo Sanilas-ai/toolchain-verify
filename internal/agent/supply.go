@@ -9,21 +9,33 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Sanilas-ai/toolchain-verify/internal/models"
 )
 
 var pickleExts = map[string]bool{".pkl": true, ".pickle": true, ".pt": true, ".pth": true, ".ckpt": true, ".joblib": true}
 
 // checkModelFile flags pickle-based model files in untrusted locations:
 // loading them (torch.load without weights_only, pickle.load, joblib.load)
-// executes arbitrary code.
+// executes arbitrary code. The first bytes decide (models.Sniff): a
+// renamed safetensors/GGUF file is not flagged, a pickle or torch zip
+// named .bin is.
 func checkModelFile(c *collector, p string, d fs.DirEntry) {
 	ext := strings.ToLower(filepath.Ext(p))
-	if !pickleExts[ext] {
+	if !pickleExts[ext] && !models.IsPickleName(p) {
+		return
+	}
+	format, err := models.Sniff(p)
+	switch {
+	case err == nil && models.PickleLike(format, p):
+	case (err != nil || format == models.FmtUnknown || format == models.FmtText) && pickleExts[ext]:
+		format = "unrecognized content"
+	default:
 		return
 	}
 	c.add(Finding{Rule: "supply.pickle-model", Severity: SevWarn, Path: p,
-		Message: "pickle-based model/data file in an untrusted location; loading it with pickle/torch.load(weights_only=False)/joblib executes embedded code",
-		Fix:     "prefer .safetensors / ONNX from a verified source; if you must load it, use torch.load(weights_only=True) in a sandbox",
+		Message: "pickle-based model/data file (" + format + ") in an untrusted location; loading it with pickle/torch.load(weights_only=False)/joblib executes embedded code",
+		Fix:     "prefer .safetensors / GGUF from a verified source; scan it with `toolchain-verify models " + p + "` (opcode scan + hash); if you must load it, use torch.load(weights_only=True) in a sandbox",
 		Refs:    []string{"https://docs.python.org/3/library/pickle.html", "https://pytorch.org/docs/stable/generated/torch.load.html"}})
 }
 

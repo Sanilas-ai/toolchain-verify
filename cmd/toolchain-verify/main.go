@@ -42,6 +42,9 @@ Usage:
   toolchain-verify policy check [-m policy.toml] [--hook claude|cursor] [--in-sandbox|--on-host]
                          [--json] [-q] (-c 'CMD' ... | -- ARGV...)
   toolchain-verify policy validate [-m policy.toml]
+  toolchain-verify models [-m toolchain.toml] [--ollama-dir DIR]... [--ollama-url URL]
+                          [--verify-blobs] [--no-ollama] [--external auto|require|off]
+                          [--strict] [--json] [-v] [--list] [PATH]...
   toolchain-verify init  [-m toolchain.toml] [--force]
   toolchain-verify version
 
@@ -66,6 +69,9 @@ Usage:
          Never runs apt, dpkg, ufw or ss.
   policy decide whether a proposed command may run on the host or only via
          the sandbox (oss-run); for agent pre-exec hooks. Exit 1 = blocked.
+  models read-only model artifact scan: SHA-256, GGUF/safetensors structure,
+         pickle opcode scan (never unpickles), optional picklescan/modelscan,
+         Ollama API + blob store report. PATHs are files or directories.
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage, manifest or
 refused-configuration error, 3 agent refused an untrusted working directory
@@ -101,6 +107,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdHost(args[1:], stdin, stdout, stderr)
 	case "policy":
 		return cmdPolicy(args[1:], stdin, stdout, stderr)
+	case "models":
+		return cmdModels(args[1:], stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0
