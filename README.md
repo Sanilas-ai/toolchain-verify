@@ -51,6 +51,28 @@ toolchain-verify: examples/toolchain.toml (running in container)
 FAIL: 3 ok, 1 failed, 0 skipped
 ```
 
+### Agent protection
+
+`toolchain-verify agent` (alias `protect`) is a read-only audit of what AI coding agents
+trust on this machine: planted `AGENTS.md`/`CLAUDE.md`/`.cursorrules`/Copilot instruction
+files in Downloads, Desktop and `/tmp`; starting an agent from an untrusted directory;
+vulnerable or host-installed Flowise / Langflow / PraisonAI (embedded advisory DB with
+GHSA/CVE references); MCP configs (cleartext remotes, auto-approve, unpinned `npx`/`uvx`,
+inline secrets, world-writable files); approval bypass in Claude/Codex/VS Code settings;
+credential file permissions (stat only, never read); pip/uv index confusion, pickle models
+and `.pth` hooks. It executes nothing and never prints file contents.
+
+```bash
+toolchain-verify agent                         # defaults (+ [agent] from ./toolchain.toml if cwd is trusted)
+toolchain-verify agent --trusted ~/src -v      # trust instruction files only under ~/src
+toolchain-verify agent -m examples/agent-protect.toml --json
+toolchain-verify agent --list-advisories       # show the built-in advisory DB
+```
+
+Configure it with an `[agent]` table (see [examples/agent-protect.toml](examples/agent-protect.toml)
+and [examples/agent-hp.toml](examples/agent-hp.toml)). Threat model and limits:
+[DESIGN.md](DESIGN.md#agent-protection-mode-toolchain-verify-agent).
+
 ### Manifest
 
 ```toml
@@ -113,6 +135,28 @@ oss-run -C toolchain-verify go run ./cmd/toolchain-verify check -m examples/oss-
 - неизвестные ключи манифеста — ошибка (опечатка не отключит проверку молча).
 
 Модель угроз — в [DESIGN.md](DESIGN.md).
+
+### Защита агентов
+
+`toolchain-verify agent` (синоним `protect`) — проверка только на чтение того, чему доверяют
+ИИ-агенты: подброшенные `AGENTS.md`/`CLAUDE.md`/`.cursorrules`/инструкции Copilot в
+«Загрузках», на рабочем столе и в `/tmp` (включая `AGENTS (1).md`); запуск агента из
+недоверенного каталога; уязвимые или установленные прямо на хост Flowise / Langflow /
+PraisonAI (встроенная база уязвимостей со ссылками на GHSA/CVE); конфиги MCP (удалённые
+серверы по HTTP, auto-approve, `npx`/`uvx` без версии, секреты в конфиге, файлы с правом
+записи для всех); обход подтверждений в настройках Claude/Codex/VS Code; права на файлы с
+токенами (только `stat`, содержимое не читается); подмена индексов pip/uv, pickle-модели и
+`.pth`-хуки. Ничего не запускает и не выводит содержимое файлов.
+
+```bash
+toolchain-verify agent --trusted ~/open-source-polygon -v
+toolchain-verify agent --list-advisories
+```
+
+Настройка — таблица `[agent]` (см. [examples/agent-protect.toml](examples/agent-protect.toml)).
+Манифест из недоверенного каталога (например, `~/Downloads`) не подхватывается
+автоматически. Модель угроз и ограничения — в [DESIGN.md](DESIGN.md).
+
 
 ---
 

@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/Sanilas-ai/toolchain-verify/internal/agent"
 	"github.com/Sanilas-ai/toolchain-verify/internal/check"
 	"github.com/Sanilas-ai/toolchain-verify/internal/manifest"
 )
@@ -27,8 +29,16 @@ const usage = `toolchain-verify — verify a development toolchain against a man
 
 Usage:
   toolchain-verify check [-m toolchain.toml] [--root DIR] [--json] [-v] [--timeout 10s]
+  toolchain-verify agent [-m toolchain.toml] [--trusted DIR]... [--advisories FILE]...
+                         [--strict] [--json] [-v] [--list-advisories]
   toolchain-verify init  [-m toolchain.toml] [--force]
   toolchain-verify version
+
+  check  verify tool versions/paths/hashes (runs each tool's version probe)
+  agent  read-only agent-protection audit: planted AGENTS.md/CLAUDE.md/rules
+         files, vulnerable agent stacks (Flowise, Langflow, PraisonAI, ...),
+         MCP/approval settings, credential permissions, package-index setup.
+         Never executes binaries and never opens credential files.
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage or manifest error.
 `
@@ -45,6 +55,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdCheck(args[1:], stdout, stderr)
 	case "init":
 		return cmdInit(args[1:], stdout, stderr)
+	case "agent", "protect":
+		return cmdAgent(args[1:], stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0
@@ -65,8 +77,21 @@ func cmdCheck(args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "print a JSON report")
 	verbose := fs.Bool("v", false, "verbose: print resolved paths and SHA-256 digests")
 	timeout := fs.Duration("timeout", 10*time.Second, "timeout per version probe")
+	allowUntrusted := fs.Bool("allow-untrusted-cwd", false, "allow auto-loading ./toolchain.toml from Downloads, /tmp, ...")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if !flagSet(fs, "m", "manifest") && !*allowUntrusted {
+		// `check` executes the commands named in the manifest. A toolchain.toml
+		// planted in Downloads or /tmp must never be picked up implicitly.
+		if cwd, err := os.Getwd(); err == nil {
+			if home, err := os.UserHomeDir(); err == nil {
+				if d, bad := agent.UntrustedCwd(cwd, home, nil); bad {
+					fmt.Fprintf(stderr, "error: refusing to load ./%s from untrusted directory %s (it would run the commands it names); pass -m explicitly or --allow-untrusted-cwd\n", manifest.DefaultFile, d)
+					return 2
+				}
+			}
+		}
 	}
 	m, err := manifest.Load(*path)
 	if err != nil {
@@ -157,4 +182,185 @@ func cmdInit(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "wrote %s\n", *path)
 	return 0
+}
+
+func flagSet(fs *flag.FlagSet, names ...string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		for _, n := range names {
+			if f.Name == n {
+				set = true
+			}
+		}
+	})
+	return set
+}
+
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+func cmdAgent(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("m", manifest.DefaultFile, "manifest with an [agent] section (optional)")
+	fs.StringVar(path, "manifest", manifest.DefaultFile, "manifest with an [agent] section (optional)")
+	var trusted, advisories multiFlag
+	fs.Var(&trusted, "trusted", "trusted project root (repeatable; adds to agent.trusted_roots)")
+	fs.Var(&advisories, "advisories", "extra advisory database TOML (repeatable)")
+	noBuiltin := fs.Bool("no-builtin-advisories", false, "do not load the embedded advisory database")
+	strict := fs.Bool("strict", false, "warnings fail the run")
+	asJSON := fs.Bool("json", false, "print a JSON report")
+	verbose := fs.Bool("v", false, "verbose: also print info findings and fixes")
+	list := fs.Bool("list-advisories", false, "print the advisory database and exit")
+	home := fs.String("home", "", "home directory to audit (default: current user's)")
+	cwdFlag := fs.String("cwd", "", "working directory to evaluate (default: current)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "error: unexpected arguments %v\n", fs.Args())
+		return 2
+	}
+	if *list {
+		db, err := agent.LoadDB(!*noBuiltin, advisories)
+		if err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
+		printAdvisories(stdout, db, *asJSON)
+		return 0
+	}
+	cwd := *cwdFlag
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	cwd, _ = filepath.Abs(cwd)
+	h := *home
+	if h == "" {
+		h, _ = os.UserHomeDir()
+	}
+
+	var pol *agent.Policy
+	opt := agent.Options{Home: h, Cwd: cwd, InContainer: check.DetectContainer(), ExtraTrusted: trusted,
+		ExtraAdvisories: advisories, NoBuiltinAdvisories: *noBuiltin, Strict: *strict}
+	explicit := flagSet(fs, "m", "manifest")
+	mpath := *path
+	if !explicit {
+		mpath = filepath.Join(cwd, manifest.DefaultFile)
+	}
+	load := explicit
+	if !explicit {
+		if _, err := os.Stat(mpath); err == nil {
+			if d, bad := agent.UntrustedCwd(cwd, h, trusted); bad {
+				fmt.Fprintf(stderr, "warning: not loading %s from untrusted directory %s (a planted manifest could weaken the policy); using defaults\n", mpath, d)
+			} else {
+				load = true
+			}
+		}
+	}
+	if load {
+		m, err := manifest.Load(mpath)
+		if err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
+		pol = m.Agent
+		opt.RequireContainer = m.RequireContainer
+		opt.ManifestDir = m.Dir
+	}
+	rep, err := agent.Run(pol, opt)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 2
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(rep)
+	} else {
+		printAgent(stdout, rep, *verbose)
+	}
+	if !rep.OK {
+		return 1
+	}
+	return 0
+}
+
+func printAgent(w io.Writer, rep *agent.Report, verbose bool) {
+	ctx := "host"
+	if rep.InContainer {
+		ctx = "container"
+	}
+	fmt.Fprintf(w, "toolchain-verify agent: cwd %s (running in %s; advisories updated %s)\n", rep.Cwd, ctx, rep.AdvisoryDB)
+	if len(rep.TrustedRoots) == 0 {
+		fmt.Fprintln(w, "  note: no trusted roots configured (agent.trusted_roots / --trusted)")
+	} else if verbose {
+		fmt.Fprintf(w, "  trusted roots: %s\n", strings.Join(rep.TrustedRoots, ", "))
+	}
+	for _, f := range rep.Findings {
+		if f.Severity == agent.SevInfo && !verbose {
+			continue
+		}
+		fmt.Fprintf(w, "  %-4s  %-26s %s\n", strings.ToUpper(f.Severity), f.Rule, orDash(f.Path))
+		fmt.Fprintf(w, "        %s\n", f.Message)
+		if f.Fix != "" && (verbose || f.Severity == agent.SevFail) {
+			fmt.Fprintf(w, "        fix: %s\n", f.Fix)
+		}
+		if verbose {
+			for _, r := range f.Refs {
+				fmt.Fprintf(w, "        ref: %s\n", r)
+			}
+		}
+	}
+	if verbose && len(rep.Installs) > 0 {
+		fmt.Fprintln(w, "  agent stacks found:")
+		for _, in := range rep.Installs {
+			v := ""
+			if len(in.Vulnerable) > 0 {
+				v = " [" + strings.Join(in.Vulnerable, ", ") + "]"
+			}
+			fmt.Fprintf(w, "    %s %s %s (%s) %s%s\n", in.Stack, in.Package, in.Version, in.Source, in.Path, v)
+		}
+	}
+	fail, warn, info := rep.Counts()
+	verdict := "PASS"
+	if !rep.OK {
+		verdict = "FAIL"
+	}
+	extra := ""
+	if rep.Ignored > 0 {
+		extra = fmt.Sprintf(", %d ignored", rep.Ignored)
+	}
+	if rep.Strict {
+		extra += " (strict)"
+	}
+	fmt.Fprintf(w, "%s: %d failed, %d warnings, %d info%s\n", verdict, fail, warn, info, extra)
+}
+
+func printAdvisories(w io.Writer, db *agent.DB, asJSON bool) {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(db)
+		return
+	}
+	fmt.Fprintf(w, "advisory database updated %s (sources: %s)\n", db.Updated, strings.Join(db.Sources, ", "))
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "  ID\tSTACK\tPACKAGES\tAFFECTED\tFIXED\tACTION")
+	for _, a := range db.Advisories {
+		pk := a.Packages
+		if len(pk) == 0 {
+			for _, s := range db.Stacks {
+				if s.Name == a.Stack {
+					pk = s.Packages
+				}
+			}
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.Stack, strings.Join(pk, ","), a.Affected, orDash(a.Fixed), a.Action)
+	}
+	tw.Flush()
 }

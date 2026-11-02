@@ -10,6 +10,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/Sanilas-ai/toolchain-verify/internal/agent"
 	"github.com/Sanilas-ai/toolchain-verify/internal/version"
 )
 
@@ -22,6 +23,8 @@ type Manifest struct {
 	// sandbox); false = must run on the host; unset = don't care.
 	RequireContainer *bool  `toml:"require_container"`
 	Tools            []Tool `toml:"tool"`
+	// Agent configures `toolchain-verify agent` (agent-protection checks).
+	Agent *agent.Policy `toml:"agent"`
 
 	// Dir is the directory containing the manifest (not part of the file).
 	Dir string `toml:"-"`
@@ -77,8 +80,13 @@ func Parse(data []byte) (*Manifest, error) {
 		}
 		return nil, fmt.Errorf("unknown keys: %s", strings.Join(keys, ", "))
 	}
-	if len(m.Tools) == 0 {
-		return nil, fmt.Errorf("no [[tool]] entries")
+	if len(m.Tools) == 0 && m.Agent == nil {
+		return nil, fmt.Errorf("no [[tool]] entries and no [agent] section")
+	}
+	if m.Agent != nil {
+		if err := m.Agent.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	seen := map[string]bool{}
 	for i := range m.Tools {

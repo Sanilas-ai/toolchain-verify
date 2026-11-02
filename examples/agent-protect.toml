@@ -1,0 +1,55 @@
+# Agent-protection policy for `toolchain-verify agent` (generic defaults).
+#   toolchain-verify agent -m examples/agent-protect.toml
+# Every key is optional; omitted keys use the defaults shown in comments.
+# The [agent] table can live in the same toolchain.toml as your [[tool]]s.
+
+# Recommended: run exec-capable agents and tools only in a container.
+# The agent audit warns (policy.require-container) when exec-capable
+# surfaces exist but this is not set.
+# require_container = true
+
+[agent]
+# Instruction files (AGENTS.md, CLAUDE.md, .cursorrules, ...) are trusted
+# only below these roots. Never list "~" or "/".
+trusted_roots = ["~/src", "~/work"]
+
+# Scanned for planted instruction files, MCP configs and pickle models.
+# Default: ~/Downloads, ~/Загрузки, XDG_DOWNLOAD_DIR, ~/Desktop,
+# ~/Рабочий стол, /tmp, /var/tmp, /dev/shm.
+# untrusted_dirs = ["~/Downloads", "/tmp"]
+extra_untrusted_dirs = ["~/Documents/attachments"]
+
+# "fail" (default) or "warn".
+untrusted_instruction = "fail"
+# scan_depth = 4
+
+# Add instruction file names used by other tools (base name or trailing path).
+# extra_instruction_files = [".myagent/rules/*"]
+
+# Starting an agent with cwd inside these fails (default: untrusted_dirs).
+# forbid_cwd = ["~/Downloads", "/tmp"]
+
+# Where to look for Flowise / Langflow / PraisonAI / ... installs, lockfiles
+# and compose files. Default: trusted_roots + global install locations.
+# inventory_paths = ["~/src", "/opt"]
+# extra_inventory_paths = ["/srv/agents"]
+# inventory_depth = 6
+
+# Extra advisory database files (same format as internal/agent/advisories.toml).
+# advisories = ["agent-advisories.local.toml"]
+# builtin_advisories = true
+
+# Extra MCP / agent config files to audit (credential files are refused).
+# mcp_configs = ["~/.config/myagent/mcp.json"]
+
+# Exec-capable agent stacks installed outside a container fail (default true).
+require_container_for_exec = true
+
+# Extra credential files/dirs: never opened, never scanned into, permissions checked.
+# credential_paths = ["~/.config/mycloud"]
+
+# supply_chain = true   # pip/uv/npm index config, pickle models, .pth hooks
+# strict = false        # warnings fail the run
+
+# Suppress findings: "rule" or "rule:path-glob" ("/**" suffix = subtree).
+ignore = ["mcp.remote"]

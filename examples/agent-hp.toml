@@ -1,0 +1,16 @@
+# Agent-protection policy for Sanilas' HP EliteBook layout:
+# repos live in ~/open-source-polygon (mounted as /work in the OSS sandbox).
+#
+# On the host (read-only audit, executes nothing):
+#   toolchain-verify agent -m ~/open-source-polygon/toolchain-verify/examples/agent-hp.toml
+# In the sandbox:
+#   oss-run -C toolchain-verify go run ./cmd/toolchain-verify agent -m examples/agent-hp.toml
+
+[agent]
+trusted_roots = ["~/open-source-polygon", "/work"]
+untrusted_instruction = "fail"
+require_container_for_exec = true
+strict = false
+
+# The sandbox scripts themselves live here; they are not agent stacks.
+extra_inventory_paths = ["~/open-source-sandbox"]

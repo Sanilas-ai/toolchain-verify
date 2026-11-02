@@ -60,3 +60,34 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAgentSection(t *testing.T) {
+	m, err := Parse([]byte(`
+require_container = true
+
+[agent]
+trusted_roots = ["~/open-source-polygon"]
+untrusted_instruction = "warn"
+scan_depth = 3
+ignore = ["mcp.remote", "instr.untrusted:/tmp/**"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Agent == nil || m.Agent.TrustedRoots[0] != "~/open-source-polygon" || m.Agent.ScanDepth != 3 {
+		t.Errorf("agent section not parsed: %+v", m.Agent)
+	}
+	if len(m.Tools) != 0 {
+		t.Error("agent-only manifest should have no tools")
+	}
+	for name, doc := range map[string]string{
+		"agent typo":       "[agent]\ntrusted_root = [\"x\"]\n",
+		"agent bad enum":   "[agent]\nuntrusted_instruction = \"maybe\"\n",
+		"agent bad depth":  "[agent]\nscan_depth = 99\n",
+		"agent bad ignore": "[agent]\nignore = [\":x\"]\n",
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}
