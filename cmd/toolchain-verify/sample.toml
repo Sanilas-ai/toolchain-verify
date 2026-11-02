@@ -1,0 +1,36 @@
+# toolchain.toml — manifest for toolchain-verify
+# https://github.com/Sanilas-ai/toolchain-verify
+#
+# Each [[tool]] entry:
+#   name          display name (unique); also the command to look up unless `command` is set
+#   command       binary name (searched on PATH / --root) or a path
+#   version       constraint: "1.22.3", "1.22" / "1.22.x", ">=1.22, <2", "~3.12", "^20.11", "a || b"
+#   version_args  arguments for the version probe (default ["--version"])
+#   version_regex optional regex; named group (?P<version>...) or group 1 is the version
+#   path          optional glob the binary path must match; "**" crosses directories
+#   sha256        optional SHA-256 of the binary (after resolving symlinks)
+#   optional      true = a missing tool is reported as SKIP instead of FAIL
+#
+# Uncomment to refuse running outside a container (e.g. the OSS Docker sandbox):
+# require_container = true
+
+[[tool]]
+name = "go"
+version = ">=1.22"
+version_args = ["version"]
+version_regex = 'go(?P<version>\d+\.\d+(\.\d+)?)'
+# path = "/usr/local/go/bin/go"
+
+[[tool]]
+name = "node"
+version = ">=20"
+
+[[tool]]
+name = "python3"
+version = ">=3.10"
+
+[[tool]]
+name = "git"
+version = ">=2.30"
+version_regex = 'git version (?P<version>\d+\.\d+(\.\d+)?)'
+# sha256 = "<run `toolchain-verify check -v` to print the current digest>"

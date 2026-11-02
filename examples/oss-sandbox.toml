@@ -1,0 +1,29 @@
+# Manifest for Sanilas' Docker OSS sandbox (~/open-source-sandbox).
+# Run inside the sandbox:
+#   oss-run -C toolchain-verify go run ./cmd/toolchain-verify check -m examples/oss-sandbox.toml
+# On the host it fails on purpose (require_container), which catches
+# "built on the host by mistake" situations.
+require_container = true
+
+[[tool]]
+name = "go"
+version = ">=1.22"
+version_args = ["version"]
+version_regex = 'go(?P<version>\d+\.\d+(\.\d+)?)'
+path = "/opt/go/bin/go"
+
+[[tool]]
+name = "node"
+version = ">=22, <23"
+path = "/opt/node/**"
+
+[[tool]]
+name = "python3"
+version = "~3.10"
+path = "/usr/bin/python3*"
+
+[[tool]]
+name = "git"
+version = ">=2.34"
+version_regex = 'git version (?P<version>\d+\.\d+(\.\d+)?)'
+path = "/usr/bin/git"
