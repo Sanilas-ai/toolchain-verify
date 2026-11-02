@@ -1,0 +1,115 @@
+# Host-vs-sandbox execution policy for agents on the HP EliteBook.
+# Mirrors ~/open-source-sandbox/README.md: OSS install/build/test only via
+# oss-run / oss-shell; nothing installed on the host; git/gh/docker status
+# are fine on the host.
+#
+#   toolchain-verify policy check -m examples/exec-policy-hp.toml -c 'go test ./...'
+#   # Claude Code (.claude/settings.json → hooks.PreToolUse, matcher "Bash"):
+#   #   toolchain-verify policy check -m ~/.config/toolchain-verify/exec-policy.toml --hook claude
+#   # Cursor (hooks.json → beforeShellExecution):
+#   #   toolchain-verify policy check --hook cursor
+#
+# Rules are evaluated top to bottom; the first match wins. Verdicts:
+#   host    allowed on the host
+#   sandbox host-forbidden; allowed via a sandbox wrapper or inside it
+#   deny    forbidden (needs Sanilas' explicit consent); inside the
+#           sandbox only rules with everywhere = true apply
+
+[exec_policy]
+default = "host"
+sandbox_root = "~/open-source-polygon"
+sandbox_hint = "~/open-source-sandbox/bin/oss-run -C {repo} {command}"
+sandbox_wrappers = [
+  "oss-run", "oss-shell", "~/open-source-sandbox/bin/oss-run", "~/open-source-sandbox/bin/oss-shell",
+  "docker exec oss-sandbox", "docker compose exec dev",
+]
+pipe_to_shell = "deny"
+unparsable = "deny"
+
+# --- never, not even in the sandbox -----------------------------------
+[[exec_policy.rule]]
+commands = ["gh"]
+args = ["auth refresh*", "auth login*", "auth logout*", "auth token*", "auth setup-git*"]
+where = "deny"
+everywhere = true
+reason = "gh auth changes/token export are Sanilas' decision (sandbox gets GH_TOKEN per exec)"
+
+[[exec_policy.rule]]
+commands = ["docker", "podman"]
+args = ["*--privileged*", "*docker.sock*", "*-v /:/*", "*--volume /:/*", "*--pid host*", "*--pid=host*", "*--network host*", "*--net=host*"]
+where = "deny"
+everywhere = true
+reason = "privileged containers, host namespaces and docker.sock mounts are root on the host"
+
+[[exec_policy.rule]]
+commands = ["docker"]
+args = ["volume rm*", "volume prune*", "system prune*", "compose down -v*", "compose down --volumes*"]
+where = "deny"
+reason = "removing Docker volumes (sandbox caches, mongo-data) needs Sanilas' consent"
+
+# --- host package managers: no installs on the host -------------------
+[[exec_policy.rule]]
+commands = ["apt", "apt-get", "aptitude", "dpkg", "snap", "flatpak"]
+args = ["install*", "reinstall*", "remove*", "purge*", "upgrade*", "full-upgrade*", "dist-upgrade*", "autoremove*", "refresh*", "-i *", "--install*", "-r *", "-P *"]
+where = "deny"
+reason = "nothing is installed on the host for OSS work; add it to the sandbox Dockerfile instead"
+
+[[exec_policy.rule]]
+commands = ["sudo", "doas", "pkexec", "su"]
+where = "deny"
+reason = "root on the host needs Sanilas' explicit consent"
+
+[[exec_policy.rule]]
+commands = ["rustup-init", "nvm", "sdk", "mise", "asdf"]
+where = "sandbox"
+reason = "toolchains are installed with mise/rustup inside the sandbox volumes"
+
+# --- OSS toolchains: sandbox only --------------------------------------
+[[exec_policy.rule]]
+commands = [
+  "go", "gofmt", "golangci-lint", "goreleaser",
+  "node", "npm", "npx", "pnpm", "pnpx", "yarn", "corepack", "bun", "bunx", "deno", "tsc", "vite", "jest", "vitest", "eslint", "prettier",
+  "cargo", "rustc", "rustup",
+  "pip", "pip3", "pipx", "poetry", "uv", "uvx", "pytest", "tox", "nox", "hatch", "pdm",
+  "mvn", "mvnw", "gradle", "gradlew", "java", "javac", "kotlinc", "sbt", "lein", "clojure", "clj",
+  "make", "cmake", "ninja", "meson", "bazel", "gcc", "g++", "cc", "clang", "ld",
+  "sdkmanager", "adb", "avdmanager",
+  "mongod", "mongosh",
+]
+where = "sandbox"
+reason = "OSS install/build/test runs only in the oss-sandbox container"
+
+[[exec_policy.rule]]
+commands = ["python", "python3", "python3.*"]
+args = ["-m pip*", "-m pytest*", "-m venv*", "-m build*", "-m tox*", "setup.py*", "-m poetry*"]
+where = "sandbox"
+reason = "Python package installs and test runs belong in the sandbox"
+
+[[exec_policy.rule]]
+commands = ["curl", "wget"]
+args = ["*| sh*", "*-o /usr/*", "*-O /usr/*"]
+where = "deny"
+reason = "no downloads into system paths on the host"
+
+# --- fine on the host --------------------------------------------------
+[[exec_policy.rule]]
+commands = ["git"]
+where = "host"
+
+[[exec_policy.rule]]
+commands = ["gh"]
+where = "host"
+
+[[exec_policy.rule]]
+commands = ["docker", "podman"]
+args = ["ps*", "images*", "image ls*", "image inspect*", "inspect*", "logs*", "version*", "info*", "stats --no-stream*", "network ls*", "volume ls*", "compose ps*", "compose logs*", "exec oss-sandbox*", "compose exec dev*"]
+where = "host"
+
+[[exec_policy.rule]]
+commands = ["docker", "podman", "docker-compose"]
+where = "deny"
+reason = "other Docker commands change the host; use oss-sandbox up/down/rebuild or ask Sanilas"
+
+[[exec_policy.rule]]
+commands = ["oss-sandbox", "oss-mongo", "toolchain-verify", "ls", "cat", "rg", "grep", "find", "head", "tail", "wc", "jq", "sed", "awk", "diff", "ss", "ip", "uname", "id", "df", "du", "ps", "systemctl", "journalctl"]
+where = "host"

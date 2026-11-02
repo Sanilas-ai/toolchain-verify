@@ -195,6 +195,91 @@ toolchain-verify docker -q -m examples/hygiene-hp.toml   # cron: silent unless s
 
 Exit codes for `exec-lint` and `docker`: `0` pass · `1` failing findings · `2` usage/manifest error or refused target.
 
+### Host security (`host`)
+
+`toolchain-verify host [apt|net]` is a read-only audit of the machine itself. It parses
+files only (dpkg status, apt lists, `apt.conf.d`, systemd timer links, `/proc`,
+`/etc/ufw`); it never runs `apt`, `dpkg`, `ufw` or `ss`, never needs root and never
+changes anything.
+
+- **apt security lag:** pending updates from the `<codename>-security` pocket (installed
+  version vs. the downloaded `Packages` indexes, dpkg version rules), age of the security
+  `InRelease` (`Date:`), unattended-upgrades health (package, `APT::Periodic`, security
+  origin, `apt-daily-upgrade.timer`, last-run stamp), interrupted dpkg, `reboot-required`
+  (+ `.pkgs`), ESM-only fixes from update-notifier.
+- **kernel CVE floors:** `[[host.kernel_floor]]` entries (CVE, minimum package version,
+  kernel series) compared with the running kernel (`/proc/sys/kernel/osrelease` +
+  build number from `/proc/version`); also warns when a newer kernel is installed but not
+  booted. No CVE is hard-coded.
+- **snaps:** warns when the LXD snap (configurable `warn_snaps`) is present or the user is
+  in the `lxd` group.
+- **listeners vs. ufw:** sockets from `/proc/net/{tcp,udp}{,6}` (or `--ss FILE` with
+  `ss -tulnH` output) reconciled with ufw rules (`/etc/ufw/user*.rules`, or
+  `--ufw-status FILE` with `sudo ufw status verbose` output when the rules are root-only).
+
+```bash
+toolchain-verify host -m examples/host-hp.toml -v
+sudo ufw status verbose > /tmp/ufw.txt         # optional: rules are root-only
+toolchain-verify host net -m examples/host-hp.toml --ufw-status /tmp/ufw.txt
+toolchain-verify host apt --json --strict
+```
+
+| Rule | Severity |
+| --- | --- |
+| `apt.security-pending` | warn (fail at `security_pending_fail`, default 10) |
+| `apt.lists-stale` | warn > `lists_max_age_hours` (48), fail > `lists_fail_age_days` (7) |
+| `apt.no-security-source` | fail (none) / warn (wrong release) |
+| `apt.unattended` | warn when unhealthy (info with `require_unattended = false`) |
+| `apt.reboot-required` | warn, fail after `reboot_max_age_days` (7) |
+| `apt.dpkg-interrupted`, `kernel.reboot-pending`, `snap.present`, `group.lxd` | warn |
+| `kernel.floor` | fail (or `severity = "warn"`) below `min` |
+| `net.public-listener` | wildcard listener and ufw off (fail if sensitive) or rules unknown |
+| `net.unneeded-bind` | wildcard listener without a ufw allow: bind to 127.0.0.1 |
+| `net.exposed` | wildcard listener allowed from anywhere (fail if sensitive, info if `expected_public`) |
+| `net.address-listener` | sensitive port (Docker API, Redis, Ollama, ...) on a LAN address |
+| `net.allow-unused` | info: allow rule with nothing listening |
+| `net.no-firewall`, `net.ufw-inactive`, `net.ufw-default-allow` | warn |
+
+Configure with `[host]`, `[host.apt]`, `[host.net]` and `[[host.kernel_floor]]` (see
+[examples/host-hp.toml](examples/host-hp.toml)). Build the binary in the sandbox and run
+it on the host: the sandbox cannot see the host's packages, sockets or firewall.
+
+### Host-vs-sandbox exec policy (`policy`)
+
+`toolchain-verify policy check` decides whether a proposed shell command may run on the
+host or only through the sandbox wrapper (`oss-run`). It parses the command (quotes,
+`&&`/`||`/`;`/pipes, `$(...)`, backticks, `<(...)`, heredocs, `sudo`/`env`/`timeout`/
+`xargs`/`nohup`/`bash -c` wrappers, `curl | sh`) and never executes it. Unparsable input is
+denied (fail closed). Exit code: 0 allowed, 1 blocked, 2 usage/policy error.
+
+```bash
+toolchain-verify policy check -m examples/exec-policy-hp.toml -c 'go test ./...'   # exit 1 + oss-run hint
+toolchain-verify policy check -m examples/exec-policy-hp.toml -- git status          # exit 0
+toolchain-verify policy validate -m ~/.config/toolchain-verify/exec-policy.toml
+```
+
+Verdicts: `host` (allowed), `sandbox` (allowed only via a `sandbox_wrappers` prefix or when
+the checker runs inside the sandbox — `/.dockerenv` marker), `deny` (needs a human;
+`everywhere = true` also applies inside the sandbox, e.g. `gh auth refresh`). Rules are
+evaluated top to bottom, the first match wins; the most restrictive segment decides.
+
+The policy is TOML like the rest of the project (an `[exec_policy]` section; it can live in
+its own file). Lookup order: `-m`, `$TOOLCHAIN_VERIFY_POLICY`,
+`~/.config/toolchain-verify/exec-policy.toml`, then `./toolchain.toml` (trusted cwd only).
+
+Agent hooks (the command arrives as JSON on stdin):
+
+```jsonc
+// Claude Code: .claude/settings.json — exit 2 blocks, stderr goes to the model
+{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
+  "command": "toolchain-verify policy check --hook claude"}]}]}}
+// Cursor: ~/.cursor/hooks.json — prints {"permission":"allow|deny",...}
+{"version": 1, "hooks": {"beforeShellExecution": [{"command": "toolchain-verify policy check --hook cursor"}]}}
+```
+
+A missing policy or a malformed payload blocks. The policy is a guard rail against
+mistakes and prompt injection, not a sandbox: see [DESIGN.md](DESIGN.md#exec-policy-toolchain-verify-policy).
+
 ### Manifest
 
 ```toml
@@ -307,6 +392,56 @@ toolchain-verify agent --quarantine                # убрать подброш
   сокету): порты на `0.0.0.0` (Docker обходит ufw), `--privileged`, монтирование сокета и
   системных каталогов, образы `:latest` без digest, пользователь в группе `docker`, dockerd на TCP,
   лишний исходящий трафик у контейнеров. Пример для HP — `examples/hygiene-hp.toml`.
+
+### Безопасность хоста (`host`)
+
+`toolchain-verify host [apt|net]` — проверка самой машины только на чтение: разбираются
+файлы (статус dpkg, списки apt, `apt.conf.d`, ссылки таймеров systemd, `/proc`, `/etc/ufw`).
+`apt`, `dpkg`, `ufw` и `ss` не запускаются, root не нужен, ничего не меняется.
+
+- **отставание по безопасности apt:** ожидающие обновления из `<codename>-security`,
+  возраст `InRelease` для security, исправность unattended-upgrades (пакет,
+  `APT::Periodic`, security в Allowed-Origins, `apt-daily-upgrade.timer`, время последнего
+  запуска), прерванный dpkg, `reboot-required`, исправления только через ESM;
+- **минимальная версия ядра по CVE:** записи `[[host.kernel_floor]]` (CVE, минимальная
+  версия пакета, серия ядра) сравниваются с работающим ядром; ни одна CVE не зашита в код;
+  отдельно — установлено более новое ядро, но не выполнена перезагрузка;
+- **snap:** предупреждение, если установлен snap LXD или пользователь в группе `lxd`;
+- **порты и ufw:** слушающие сокеты из `/proc/net` (или `--ss FILE`) сверяются с правилами
+  ufw (`/etc/ufw/user*.rules` или вывод `sudo ufw status verbose` через `--ufw-status`, если
+  правила доступны только root). Слушает на 0.0.0.0 без разрешающего правила — привязать к
+  127.0.0.1; разрешено отовсюду — предупреждение (для чувствительных портов — ошибка);
+  правило без слушателя — info.
+
+```bash
+toolchain-verify host -m examples/host-hp.toml -v
+sudo ufw status verbose > /tmp/ufw.txt
+toolchain-verify host net -m examples/host-hp.toml --ufw-status /tmp/ufw.txt
+```
+
+Бинарник собирается в песочнице, а запускается на хосте: из песочницы не видно пакеты,
+сокеты и firewall хоста.
+
+### Политика «хост или песочница» (`policy`)
+
+`toolchain-verify policy check` решает, можно ли выполнить команду на хосте или только через
+`oss-run`. Команда разбирается (кавычки, `&&`/`;`/конвейеры, `$(...)`, heredoc, обёртки
+`sudo`/`env`/`timeout`/`xargs`/`bash -c`, `curl | sh`), но не выполняется; неразбираемое
+запрещается. Код выхода: 0 — можно, 1 — запрещено, 2 — ошибка.
+
+```bash
+toolchain-verify policy check -m examples/exec-policy-hp.toml -c 'go test ./...'   # 1 + подсказка oss-run
+toolchain-verify policy check --hook claude    # PreToolUse-хук Claude Code (exit 2 блокирует)
+toolchain-verify policy check --hook cursor    # beforeShellExecution-хук Cursor
+```
+
+Политика — TOML, как и остальной проект (секция `[exec_policy]`, можно отдельным файлом
+`~/.config/toolchain-verify/exec-policy.toml`). Пример для HP —
+[examples/exec-policy-hp.toml](examples/exec-policy-hp.toml): go/node/npm/pnpm/cargo/pip/
+pytest/mvn/gradle — только в песочнице; git, gh и `docker ps/logs/inspect` — на хосте;
+`sudo`, установка пакетов на хост, `npm -g`, `gh auth refresh/login`, `docker run
+--privileged` и монтирование `docker.sock`, `curl | sh` — запрещены. Это ограждение от
+ошибок и prompt injection, а не песочница.
 
 ---
 

@@ -13,6 +13,8 @@ import (
 	"github.com/Sanilas-ai/toolchain-verify/internal/agent"
 	"github.com/Sanilas-ai/toolchain-verify/internal/dockerhost"
 	"github.com/Sanilas-ai/toolchain-verify/internal/execlint"
+	"github.com/Sanilas-ai/toolchain-verify/internal/execpolicy"
+	"github.com/Sanilas-ai/toolchain-verify/internal/hostsec"
 	"github.com/Sanilas-ai/toolchain-verify/internal/version"
 )
 
@@ -31,6 +33,10 @@ type Manifest struct {
 	ExecLint *execlint.Policy `toml:"exec_lint"`
 	// Docker configures `toolchain-verify docker` (host hygiene).
 	Docker *dockerhost.Policy `toml:"docker"`
+	// Host configures `toolchain-verify host` (apt lag, kernel floors, ufw).
+	Host *hostsec.Policy `toml:"host"`
+	// ExecPolicy configures `toolchain-verify policy` (host vs sandbox).
+	ExecPolicy *execpolicy.Policy `toml:"exec_policy"`
 
 	// Dir is the directory containing the manifest (not part of the file).
 	Dir string `toml:"-"`
@@ -86,8 +92,8 @@ func Parse(data []byte) (*Manifest, error) {
 		}
 		return nil, fmt.Errorf("unknown keys: %s", strings.Join(keys, ", "))
 	}
-	if len(m.Tools) == 0 && m.Agent == nil && m.ExecLint == nil && m.Docker == nil {
-		return nil, fmt.Errorf("no [[tool]] entries and no [agent], [exec_lint] or [docker] section")
+	if len(m.Tools) == 0 && m.Agent == nil && m.ExecLint == nil && m.Docker == nil && m.Host == nil && m.ExecPolicy == nil {
+		return nil, fmt.Errorf("no [[tool]] entries and no [agent], [exec_lint], [docker], [host] or [exec_policy] section")
 	}
 	if m.Agent != nil {
 		if err := m.Agent.Validate(); err != nil {
@@ -101,6 +107,16 @@ func Parse(data []byte) (*Manifest, error) {
 	}
 	if m.Docker != nil {
 		if err := m.Docker.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if m.Host != nil {
+		if err := m.Host.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if m.ExecPolicy != nil {
+		if err := m.ExecPolicy.Validate(); err != nil {
 			return nil, err
 		}
 	}

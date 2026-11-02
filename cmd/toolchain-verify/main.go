@@ -37,6 +37,11 @@ Usage:
                          [--include-tests] [--json] [-v] [-q] [PATH...]
   toolchain-verify docker [-m toolchain.toml] [--socket PATH|off] [--require-engine]
                          [--strict] [--json] [-v] [-q]
+  toolchain-verify host [apt|net] [-m toolchain.toml] [--ufw-status FILE|-] [--ss FILE|-]
+                         [--root DIR] [--strict] [--json] [-v] [-q]
+  toolchain-verify policy check [-m policy.toml] [--hook claude|cursor] [--in-sandbox|--on-host]
+                         [--json] [-q] (-c 'CMD' ... | -- ARGV...)
+  toolchain-verify policy validate [-m policy.toml]
   toolchain-verify init  [-m toolchain.toml] [--force]
   toolchain-verify version
 
@@ -55,6 +60,12 @@ Usage:
   docker read-only Docker/Podman host hygiene: ports on 0.0.0.0, privileged
          containers, socket/host mounts, :latest images, docker group,
          dockerd on TCP, unneeded egress. Engine API is queried with GET only.
+  host   read-only host security: pending apt security updates, age of the
+         security indexes, unattended-upgrades health, reboot-required,
+         kernel CVE floors, LXD snap; listening sockets reconciled with ufw.
+         Never runs apt, dpkg, ufw or ss.
+  policy decide whether a proposed command may run on the host or only via
+         the sandbox (oss-run); for agent pre-exec hooks. Exit 1 = blocked.
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage, manifest or
 refused-configuration error, 3 agent refused an untrusted working directory
@@ -64,6 +75,9 @@ refused-configuration error, 3 agent refused an untrusted working directory
 // exitUntrustedCwd is returned by `agent --pre-session` when the working
 // directory is an untrusted location (Downloads, /tmp, ...).
 const exitUntrustedCwd = 3
+
+// stdin is read by `policy check --hook` and `host --ufw-status -`.
+var stdin io.Reader = os.Stdin
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -83,6 +97,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdExecLint(args[1:], stdout, stderr)
 	case "docker", "docker-hygiene":
 		return cmdDocker(args[1:], stdout, stderr)
+	case "host":
+		return cmdHost(args[1:], stdin, stdout, stderr)
+	case "policy":
+		return cmdPolicy(args[1:], stdin, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0
