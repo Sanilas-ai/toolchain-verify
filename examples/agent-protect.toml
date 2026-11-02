@@ -51,5 +51,16 @@ require_container_for_exec = true
 # supply_chain = true   # pip/uv/npm index config, pickle models, .pth hooks
 # strict = false        # warnings fail the run
 
+# Advisories without a fixed release fail instead of warn (default false).
+# ban_unfixed = true
+
+# Host inventory: pip user site, pipx, conda, npm -g, snap, systemd units,
+# Docker/Podman images and containers (GET-only on the local socket).
+# host_inventory = true
+# docker_socket = "off"   # or an absolute socket path
+
+# Destination for --quarantine (never ~, /, a credential, trusted or untrusted dir).
+# quarantine_dir = "~/.local/state/toolchain-verify/quarantine"
+
 # Suppress findings: "rule" or "rule:path-glob" ("/**" suffix = subtree).
 ignore = ["mcp.remote"]

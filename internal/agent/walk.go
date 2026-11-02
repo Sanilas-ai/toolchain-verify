@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -108,16 +109,25 @@ func matchPatterns(path string, patterns []string) bool {
 	return false
 }
 
-// normalizeDownloadName strips the duplicate suffix browsers add:
-// "AGENTS (1).md" -> "AGENTS.md", "AGENTS(2).md" -> "AGENTS.md".
+// dupSuffixRe matches the duplicate-name suffixes added by browsers and
+// file managers: " (1)", "(2)", " - Copy", " - Copy (2)", " copy", " copy 2"
+// and macOS " 2".
+var dupSuffixRe = regexp.MustCompile(`^(.+?)(?: ?\(\d{1,3}\)| - Copy(?: \(\d{1,3}\))?| copy(?: \d{1,3})?| \d{1,3})$`)
+
+// normalizeDownloadName strips the duplicate suffix browsers and file
+// managers add: "AGENTS (1).md" -> "AGENTS.md", "AGENTS(2).md" ->
+// "AGENTS.md", ".cursorrules (1)" -> ".cursorrules", "AGENTS.md (1)" ->
+// "AGENTS.md", "GEMINI - Copy.md" -> "GEMINI.md".
 func normalizeDownloadName(name string) string {
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	if i := strings.LastIndex(stem, "("); i > 0 && strings.HasSuffix(stem, ")") {
-		num := stem[i+1 : len(stem)-1]
-		if num != "" && strings.Trim(num, "0123456789") == "" {
-			return strings.TrimRight(stem[:i], " ") + ext
-		}
+	// ".cursorrules (1)" or "AGENTS.md (1)": the suffix is inside what
+	// filepath.Ext considers the extension.
+	if stem == "" || strings.ContainsAny(ext, " (") {
+		stem, ext = name, ""
+	}
+	if m := dupSuffixRe.FindStringSubmatch(stem); m != nil {
+		return m[1] + ext
 	}
 	return name
 }

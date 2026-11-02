@@ -14,3 +14,15 @@ strict = false
 
 # The sandbox scripts themselves live here; they are not agent stacks.
 extra_inventory_paths = ["~/open-source-sandbox"]
+
+# Flowise <= 3.1.4 (CVE-2026-119978) and other advisories without a fixed
+# release fail instead of warn: ban until a fix ships.
+ban_unfixed = true
+
+# Read-only host inventory: pip user site, npm -g, snap, systemd units and
+# Docker images/containers (Ollama runs in Docker on 127.0.0.1:11434 here).
+host_inventory = true
+# docker_socket = "/var/run/docker.sock"   # or "off"
+
+# --quarantine moves planted AGENTS.md / MCP configs from Downloads, /tmp here.
+# quarantine_dir = "~/.local/state/toolchain-verify/quarantine"

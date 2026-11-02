@@ -43,9 +43,12 @@ It never executes binaries, never opens credential files and never prints file c
 | Threat class (documented) | Rules |
 |---|---|
 | Planted instruction files: an `AGENTS.md` / `CLAUDE.md` / `.cursorrules` / Copilot instructions file dropped into Downloads, Desktop or `/tmp` (including browser-renamed `AGENTS (1).md`) hijacks an agent started there | `instr.untrusted` (fail; content labels such as `pipe-to-shell`, `credential-path`, `exfil-endpoint`, `approval-bypass`, `hidden-unicode`), `cwd.untrusted`, `cwd.ancestor-instructions`, `instr.home` |
+| Agent started from an untrusted cwd, or from an unknown checkout carrying its own instruction files | `cwd.untrusted` (`--pre-session` exit 3, `--allow-untrusted-cwd` → warn), `cwd.instructions` (fail with trusted roots, else warn) |
+| Planted files remaining on disk after detection | `--quarantine`: move to a quarantine dir as `*.quarantined`, finding → warn (only for `instr.untrusted`, `mcp.untrusted-location`) |
 | Prompt injection inside trusted repos (instruction override, hidden Unicode bidi/tag characters, encoded blobs) | `instr.suspicious` (warn) |
 | Tampering with instruction or MCP files by other local users or processes | `instr.writable`, `mcp.writable` (world-writable = fail, foreign owner = warn) |
 | Prompt injection → RCE in agent stacks (Flowise, Langflow/lfx, PraisonAI, Vibe-Trading, LangAlpha), from the declarative advisory DB | `stack.vulnerable`, `stack.present`, `stack.unknown-version`, `stack.image-unpinned` |
+| Agent stacks installed globally or run as services/containers (pip user site, pipx, conda, `npm -g`, snap, systemd units, Docker/Podman images and containers, including `ALLOW_BUILTIN_DEP` in their env) | `stack.*` with host sources, `stack.service`, `inventory.engine-unavailable` (info); `ban_unfixed` turns unfixed advisories into fail |
 | Exec-capable stacks running directly on the host | `stack.exec-on-host` (fail when `require_container_for_exec`), `policy.require-container` |
 | MCP tool poisoning / rug pull via unpinned `npx`/`uvx`/`pnpm dlx`/`pipx run` packages | `mcp.unpinned` |
 | Remote MCP servers over cleartext HTTP, or any remote server | `mcp.remote-cleartext` (fail), `mcp.remote` (info) |
@@ -66,6 +69,15 @@ It never executes binaries, never opens credential files and never prints file c
   similar are never opened. A symlink from an instruction file to a credential is flagged, not followed.
 - A `toolchain.toml` in an untrusted cwd is **not** auto-loaded (a planted manifest could
   `ignore` everything); `check` likewise refuses it unless `-m` or `--allow-untrusted-cwd`.
+- Writes nothing unless `--quarantine` is given. Quarantine only renames regular files or
+  symlinks that are still inside an untrusted dir (re-checked at move time) into a dedicated
+  dir that may not be `/`, `~`, a credential store, a trusted root or an untrusted dir.
+- Container engines are queried with `GET` only (`/images/json`, `/containers/json`,
+  `/containers/<id>/json` for stack containers) on a local unix socket; remote `DOCKER_HOST`
+  is skipped. From unit and container environments only names listed in `escalate_env` are
+  kept; values and other variables are discarded. No binary found by inventory is executed.
+- Exit codes: `0` pass, `1` findings failed, `2` usage/policy error or refused target,
+  `3` `--pre-session` refused an untrusted cwd. `-q` prints nothing on pass (cron).
 - Reads at most 512 KiB per file, bounded depth and entry counts (`scan.truncated`).
 - Advisories live in an embedded, strictly validated TOML (`internal/agent/advisories.toml`):
   every entry needs a primary-source reference; conditional or unfixed issues are `warn`
@@ -74,9 +86,9 @@ It never executes binaries, never opens credential files and never prints file c
 
 ### Limits / deferred
 
-- Does not inspect **running** processes or containers (`docker ps`, service env); a Flowise
-  started with `ALLOW_BUILTIN_DEP=true` in its own env is not detected unless the variable
-  is in the scanner's env.
+- Does not inspect arbitrary **running processes** (`/proc/*/environ`); containers, systemd
+  units and the scanner's env are covered. Versions inside images are taken from the image
+  tag only; layers are not unpacked.
 - No content-type detection (Magika-style) and no archive unpacking: a malicious
   `AGENTS.md` inside a `.zip` in Downloads is not seen until extracted.
 - Pickle detection is by extension in untrusted dirs only; no opcode scanning, no
@@ -99,4 +111,4 @@ It never executes binaries, never opens credential files and never prints file c
 ## Possible next steps
 
 `pin` subcommand that writes current versions/hashes into the manifest; env-var checks
-(`GOFLAGS`, `NODE_OPTIONS`); signed manifests; GitHub Action wrapper.
+(`GOFLAGS`, `NODE_OPTIONS`); signed manifests; GitHub Action wrapper; archive (zip) scanning in Downloads; extension audit.

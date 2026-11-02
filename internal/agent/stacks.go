@@ -26,14 +26,28 @@ func checkStacks(r *resolved, db *DB, c *collector, installs []Install) int {
 		}
 		advs := db.advisoriesFor(s, in.Package, v)
 		installed := in.Source == "dist-info" || in.Source == "node_modules" || in.Source == "pnpm"
-		where := map[bool]string{true: "installed", false: "pinned in " + in.Source}[installed]
+		where := "pinned in " + in.Source
+		switch in.Source {
+		case "dist-info", "node_modules", "pnpm":
+			where = "installed"
+		case "docker-image":
+			where = "local Docker image"
+		case "docker-container":
+			where = "Docker container"
+		case "systemd":
+			where = "started by a systemd unit"
+		}
 		for _, a := range advs {
 			in.Vulnerable = append(in.Vulnerable, a.ID)
 			sev := SevFail
+			banned := false
 			if a.Action == "warn" {
 				sev = SevWarn
-				if name, val, ok := strings.Cut(a.EscalateEnv, "="); ok && r.getenv(name) == val {
+				if name, val, ok := strings.Cut(a.EscalateEnv, "="); ok && (r.getenv(name) == val || in.Env[name] == val) {
 					sev = SevFail
+				}
+				if a.Fixed == "" && r.banUnfixed && sev != SevFail {
+					sev, banned = SevFail, true
 				}
 			}
 			ids := a.ID
@@ -43,6 +57,9 @@ func checkStacks(r *resolved, db *DB, c *collector, installs []Install) int {
 			msg := fmt.Sprintf("%s %s %s (%s) is affected by %s [%s]: %s", s.Name, in.Package, in.Version, where, ids, a.Severity, a.Summary)
 			if a.Condition != "" {
 				msg += " Condition: " + a.Condition
+			}
+			if banned {
+				msg += " Banned until a fixed release exists (agent.ban_unfixed)."
 			}
 			fix := "upgrade to " + a.Fixed + " or later"
 			if a.Fixed == "" {

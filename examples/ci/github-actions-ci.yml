@@ -1,0 +1,65 @@
+# GitHub Actions CI for this repo. Install it with:
+#   mkdir -p .github/workflows && cp examples/ci/github-actions-ci.yml .github/workflows/ci.yml
+# It lives here because pushing .github/workflows/* needs a token with the
+# `workflow` scope (gh auth refresh -s workflow) or a commit via the GitHub web UI.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.22.x", "stable"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test -race -count=1 ./...
+
+  agent-dry-run:
+    # Read-only self-check of the agent audit on the runner. Exit 1 (findings on
+    # the runner image) is tolerated; exit 2 (bad policy/usage) or 3 is not.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go build -o "$RUNNER_TEMP/toolchain-verify" ./cmd/toolchain-verify
+      - name: advisories DB loads
+        run: '"$RUNNER_TEMP/toolchain-verify" agent --list-advisories'
+      - name: pre-session gate accepts the workspace
+        run: '"$RUNNER_TEMP/toolchain-verify" agent --pre-session --trusted "$GITHUB_WORKSPACE"'
+      - name: pre-session gate refuses /tmp
+        run: |
+          mkdir -p /tmp/tv-ci && cd /tmp/tv-ci
+          set +e; "$RUNNER_TEMP/toolchain-verify" agent --pre-session -q; rc=$?; set -e
+          test "$rc" -eq 3
+      - name: example policy audit
+        run: |
+          set +e
+          "$RUNNER_TEMP/toolchain-verify" agent -m examples/agent-protect.toml --no-host-inventory --json > agent-report.json
+          rc=$?; set -e
+          echo "exit=$rc"
+          [ "$rc" -le 1 ]
