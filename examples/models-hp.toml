@@ -1,0 +1,57 @@
+# Model artifact policy for Sanilas' HP EliteBook.
+#
+# Ollama runs in Docker on 127.0.0.1:11434 with its store bind-mounted from
+# /mnt/disk480/ollama/models; other models live in /mnt/disk480/models-non-ollama.
+#
+# On the host (read-only: hashes and parses files, never unpickles, never
+# pulls, only GET /api/version and /api/tags):
+#   toolchain-verify models -m ~/open-source-polygon/toolchain-verify/examples/models-hp.toml -v --list
+# Re-hash every Ollama blob (~112 GiB of reads; slow):
+#   toolchain-verify models -m examples/models-hp.toml --verify-blobs
+# A single download before use:
+#   toolchain-verify models ~/Downloads/model.ckpt
+
+[models]
+roots = ["/mnt/disk480/models-non-ollama", "~/.cache/huggingface/hub"]
+exclude = ["**/.cache/huggingface/hub/.locks/**"]
+max_depth = 8
+
+# Pickle-based files whose imports are all known-safe: "warn" (default) keeps
+# them visible; switch to "fail" to make any pickle a CI/host failure.
+# Imports such as os.system / builtins.eval always fail regardless.
+pickle = "warn"
+unknown_import = "warn"
+
+# Your own training checkpoints: pickles here are reported as info
+# (imports are still checked).
+trusted = ["~/open-source-polygon/**/checkpoints/**"]
+
+# picklescan/modelscan are used when on PATH ("auto"); install them in a venv
+# or the sandbox, never system-wide via pip. "require" fails without them.
+external = "auto"
+scanner_timeout = "120s"
+
+# Reviewed artifacts. With a literal path the digest is pinned: a changed file
+# at that path fails (models.digest-mismatch).
+# PaddleOCR inference.pdiparams.info files are protocol-2 pickles; as scanned
+# on 2026-11-02 they import no callables (pure data).
+[[models.allow]]
+path = "/mnt/disk480/models-non-ollama/ppocr/ch_PP-OCRv4_det_infer/inference.pdiparams.info"
+sha256 = "4e0f29e5fa476126f9efe0dc69f7ca7be960705ad549385d30c9604193463e69"
+note = "PP-OCRv4 det, data-only pickle"
+
+[[models.allow]]
+path = "/mnt/disk480/models-non-ollama/ppocr/ch_PP-OCRv4_rec_infer/inference.pdiparams.info"
+sha256 = "0706cc669bdce382f582c139906076b170b112c51bf32573fe43438025777f12"
+note = "PP-OCRv4 rec, data-only pickle"
+
+[[models.allow]]
+path = "/mnt/disk480/models-non-ollama/ppocr/ch_ppocr_mobile_v2.0_cls_infer/inference.pdiparams.info"
+sha256 = "ee0c2eaa4c09814802bf520c01dfdbc1345dc2879dc9e67424d32c7b0ee88e59"
+note = "PP-OCR mobile v2 cls, data-only pickle"
+
+[models.ollama]
+url = "http://127.0.0.1:11434"
+models_dirs = ["/mnt/disk480/ollama/models"]
+verify_blobs = false
+registries = ["registry.ollama.ai", "ollama.com"]

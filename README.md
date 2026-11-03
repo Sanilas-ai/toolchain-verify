@@ -280,6 +280,41 @@ Agent hooks (the command arrives as JSON on stdin):
 A missing policy or a malformed payload blocks. The policy is a guard rail against
 mistakes and prompt injection, not a sandbox: see [DESIGN.md](DESIGN.md#exec-policy-toolchain-verify-policy).
 
+### Model artifacts
+
+`toolchain-verify models` is a read-only scan of local model files and the Ollama store. It
+finds GGUF, safetensors, `.bin`, `.pt`/`.pth`/`.ckpt`, `.pkl`/`.pickle`/`.joblib`, `.npy`/`.npz`,
+Keras, ONNX and PaddlePaddle files under the configured roots, records SHA-256, size and path,
+and checks content rather than extensions:
+
+- **pickle-based files** (including torch zip checkpoints, compressed joblib and object `.npy`)
+  get a static opcode walk that recovers every imported global *without unpickling*:
+  `os.system`, `builtins.eval`, `subprocess.*` and similar fail; unknown classes warn;
+  known-safe torch/numpy rebuild helpers are reported under `pickle = "warn"|"fail"|"info"`;
+- **safetensors**: header length, dtype × shape vs. byte ranges, overlaps, holes, trailing data;
+- **GGUF** (v2/v3): header, metadata and tensor bounds, alignment, and Jinja chat templates
+  that reach for Python internals (`__class__`, `__globals__`; CVE-2024-34359);
+- Keras v3 `Lambda` layers; Hugging Face cache blobs whose content does not match their name;
+- optional `picklescan` / `modelscan` when they are on `PATH` (never installed by this tool;
+  a warning says when they are missing and the built-in checks are used alone).
+
+The Ollama report reads `GET /api/version` and `/api/tags` on a loopback URL and the store
+layout (`manifests/`, `manifests-v2/`, `blobs/`): missing or wrong-size blobs, manifest symlinks
+that escape the store, manifest-list variants not pulled, orphaned and partial blobs,
+third-party registries, models served by the API but absent from the scanned store, and
+the identity key permissions (stat only). `--verify-blobs` re-hashes every blob.
+
+```bash
+toolchain-verify models ~/Downloads/model.ckpt            # one file
+toolchain-verify models -m examples/models-hp.toml -v --list
+toolchain-verify models --ollama-dir /srv/ollama/models --verify-blobs --json
+toolchain-verify models --no-ollama --strict ./checkpoints  # warnings fail too
+```
+
+Configure it with a `[models]` table ([examples/models-hp.toml](examples/models-hp.toml)):
+roots, trusted globs, an allowlist with SHA-256 pins, and fail vs. warn for pickles.
+Details: [DESIGN.md](DESIGN.md#model-artifact-scan-toolchain-verify-models).
+
 ### Manifest
 
 ```toml
@@ -442,6 +477,38 @@ pytest/mvn/gradle — только в песочнице; git, gh и `docker ps/
 `sudo`, установка пакетов на хост, `npm -g`, `gh auth refresh/login`, `docker run
 --privileged` и монтирование `docker.sock`, `curl | sh` — запрещены. Это ограждение от
 ошибок и prompt injection, а не песочница.
+
+### Файлы моделей
+
+`toolchain-verify models` — проверка только на чтение локальных моделей и хранилища Ollama.
+Находит GGUF, safetensors, `.bin`, `.pt`/`.pth`/`.ckpt`, `.pkl`/`.pickle`/`.joblib`, `.npy`/`.npz`,
+Keras, ONNX и файлы PaddlePaddle в заданных каталогах, считает SHA-256 и размер и смотрит на
+содержимое, а не на расширение:
+
+- **pickle** (включая zip-чекпойнты torch, сжатый joblib и `.npy` с object dtype) — статический
+  разбор опкодов **без распаковки**: импорт `os.system`, `builtins.eval`, `subprocess.*` и т.п. —
+  ошибка; неизвестные классы — предупреждение; безопасные хелперы torch/numpy — по политике
+  `pickle = "warn"|"fail"|"info"`;
+- **safetensors** — длина заголовка, dtype × shape против диапазонов байтов, пересечения, дыры;
+- **GGUF** (v2/v3) — заголовок, метаданные, границы тензоров, выравнивание и Jinja-шаблоны чата,
+  обращающиеся к внутренностям Python (CVE-2024-34359);
+- слои `Lambda` в Keras v3; блобы кэша Hugging Face, чьё содержимое не совпадает с именем;
+- `picklescan` / `modelscan`, если они есть в `PATH` (сам инструмент их не ставит; если их нет —
+  предупреждение и только встроенные проверки).
+
+Отчёт по Ollama: только `GET /api/version` и `/api/tags` на loopback и разбор `manifests/`,
+`manifests-v2/`, `blobs/` — отсутствующие блобы и неверные размеры, симлинки за пределы
+хранилища, не скачанные варианты, «осиротевшие» и недокачанные блобы, сторонние реестры,
+модели из API, которых нет в хранилище, права на ключ (только `stat`). `--verify-blobs`
+пересчитывает хеши всех блобов.
+
+```bash
+toolchain-verify models ~/Downloads/model.ckpt
+toolchain-verify models -m examples/models-hp.toml -v --list
+```
+
+Настройка — таблица `[models]` ([examples/models-hp.toml](examples/models-hp.toml)): каталоги,
+доверенные пути, allowlist с закреплёнными SHA-256, `fail` или `warn` для pickle.
 
 ---
 

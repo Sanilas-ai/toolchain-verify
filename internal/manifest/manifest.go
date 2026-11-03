@@ -15,6 +15,7 @@ import (
 	"github.com/Sanilas-ai/toolchain-verify/internal/execlint"
 	"github.com/Sanilas-ai/toolchain-verify/internal/execpolicy"
 	"github.com/Sanilas-ai/toolchain-verify/internal/hostsec"
+	"github.com/Sanilas-ai/toolchain-verify/internal/models"
 	"github.com/Sanilas-ai/toolchain-verify/internal/version"
 )
 
@@ -37,6 +38,8 @@ type Manifest struct {
 	Host *hostsec.Policy `toml:"host"`
 	// ExecPolicy configures `toolchain-verify policy` (host vs sandbox).
 	ExecPolicy *execpolicy.Policy `toml:"exec_policy"`
+	// Models configures `toolchain-verify models` (model artifact scan).
+	Models *models.Policy `toml:"models"`
 
 	// Dir is the directory containing the manifest (not part of the file).
 	Dir string `toml:"-"`
@@ -92,8 +95,8 @@ func Parse(data []byte) (*Manifest, error) {
 		}
 		return nil, fmt.Errorf("unknown keys: %s", strings.Join(keys, ", "))
 	}
-	if len(m.Tools) == 0 && m.Agent == nil && m.ExecLint == nil && m.Docker == nil && m.Host == nil && m.ExecPolicy == nil {
-		return nil, fmt.Errorf("no [[tool]] entries and no [agent], [exec_lint], [docker], [host] or [exec_policy] section")
+	if len(m.Tools) == 0 && m.Agent == nil && m.ExecLint == nil && m.Docker == nil && m.Host == nil && m.ExecPolicy == nil && m.Models == nil {
+		return nil, fmt.Errorf("no [[tool]] entries and no [agent], [exec_lint], [docker], [host], [exec_policy] or [models] section")
 	}
 	if m.Agent != nil {
 		if err := m.Agent.Validate(); err != nil {
@@ -119,6 +122,9 @@ func Parse(data []byte) (*Manifest, error) {
 		if err := m.ExecPolicy.Validate(); err != nil {
 			return nil, err
 		}
+	}
+	if err := m.Models.Validate(); err != nil {
+		return nil, err
 	}
 	seen := map[string]bool{}
 	for i := range m.Tools {
