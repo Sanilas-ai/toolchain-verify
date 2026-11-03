@@ -33,6 +33,10 @@ Usage:
                          [--strict] [--json] [-v] [-q] [--list-advisories]
                          [--pre-session] [--allow-untrusted-cwd]
                          [--quarantine [--quarantine-dir DIR]] [--no-host-inventory]
+  toolchain-verify exec-lint [-m toolchain.toml] [--fail] [--strict] [--wrapper NAME]...
+                         [--include-tests] [--json] [-v] [-q] [PATH...]
+  toolchain-verify docker [-m toolchain.toml] [--socket PATH|off] [--require-engine]
+                         [--strict] [--json] [-v] [-q]
   toolchain-verify init  [-m toolchain.toml] [--force]
   toolchain-verify version
 
@@ -44,6 +48,13 @@ Usage:
          --pre-session   fast gate before starting an agent: only the cwd
          --quarantine    move planted instruction/MCP files out of untrusted
                          dirs (the only option that changes anything)
+  exec-lint  find subprocess/exec/eval calls in files that handle LLM output
+         that do not go through a hardened container (docker run --network
+         none --read-only --cap-drop ALL --user nobody). Report mode by
+         default; --fail turns findings into a CI gate.
+  docker read-only Docker/Podman host hygiene: ports on 0.0.0.0, privileged
+         containers, socket/host mounts, :latest images, docker group,
+         dockerd on TCP, unneeded egress. Engine API is queried with GET only.
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage, manifest or
 refused-configuration error, 3 agent refused an untrusted working directory
@@ -68,6 +79,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdInit(args[1:], stdout, stderr)
 	case "agent", "protect":
 		return cmdAgent(args[1:], stdout, stderr)
+	case "exec-lint":
+		return cmdExecLint(args[1:], stdout, stderr)
+	case "docker", "docker-hygiene":
+		return cmdDocker(args[1:], stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0

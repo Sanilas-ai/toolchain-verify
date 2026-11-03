@@ -1,0 +1,33 @@
+# Code-exec isolation lint + Docker host hygiene for Sanilas' HP EliteBook:
+# repos in ~/open-source-polygon (mounted as /work in the OSS sandbox),
+# Ollama in Docker publishing 127.0.0.1:11434.
+#
+# Lint the polygon (read-only, in the sandbox):
+#   oss-run -C toolchain-verify go run ./cmd/toolchain-verify exec-lint -m examples/hygiene-hp.toml
+# Docker hygiene must see the host engine socket, so run the built binary on
+# the host (GET-only Engine API, nothing is changed):
+#   oss-run -C toolchain-verify go build -o bin/toolchain-verify ./cmd/toolchain-verify
+#   ~/open-source-polygon/toolchain-verify/bin/toolchain-verify docker -m ~/open-source-polygon/toolchain-verify/examples/hygiene-hp.toml -v
+
+[exec_lint]
+paths = ["~/open-source-polygon"]
+# Third-party checkouts are audited, not owned: keep them in report mode.
+mode = "report"
+exclude = ["**/node_modules/**", "**/fixtures/**"]
+# The OSS sandbox scripts are hardened launchers too.
+wrappers = ["oss-run", "oss-shell", "run-isolated"]
+
+[docker]
+# Ollama is meant to be reachable from the host only; if you ever publish it
+# on 0.0.0.0 this fails (Docker bypasses ufw).
+# allow_public_bind = ["ollama"]
+# Pin images instead of :latest. oss-sandbox:latest is built locally by
+# ~/open-source-sandbox; Ollama's tag is accepted explicitly for now.
+allow_latest = ["oss-sandbox", "ollama/ollama"]
+# Code runners for LLM output must not have outbound network. (The OSS
+# sandbox itself needs egress for module downloads and git push, so it is
+# not listed.)
+egress_deny = ["run-isolated*", "code-runner*"]
+# The admin user is in the docker group by design on this laptop: keep it
+# visible as a warning (set true to accept as info).
+allow_docker_group = false

@@ -127,6 +127,74 @@ Configure it with an `[agent]` table (see [examples/agent-protect.toml](examples
 and [examples/agent-hp.toml](examples/agent-hp.toml)). Threat model and limits:
 [DESIGN.md](DESIGN.md#agent-protection-mode-toolchain-verify-agent).
 
+### Code-exec isolation lint
+
+`toolchain-verify exec-lint [PATH...]` reads Go, Python, JS/TS and shell sources and reports
+process execution (`exec.Command`, `subprocess.*`, `os.system`, `child_process`, `execa`,
+`Bun.spawn`, ...) and in-process code evaluation (`eval`, `exec`, `new Function`, `vm.*`) **in files
+that handle LLM output** (they import an LLM/agent SDK such as `openai`, `anthropic`, `langchain`,
+`ollama`, MCP SDKs, call a chat-completions endpoint, or use several LLM identifiers), unless the call
+goes through a hardened container:
+
+```bash
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user 65534:65534 --ipc none --pids-limit 128 --memory 512m --memory-swap 512m --cpus 1 \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m IMAGE@sha256:... CMD
+```
+
+| Rule | Meaning |
+|---|---|
+| `exec.unwrapped` | process/shell execution outside a sandbox (`[shell]` label for `shell=True`, `sh -c`, `exec()`) |
+| `exec.dynamic-code` | `eval`/`exec`/`new Function`/`vm.*` on LLM output in-process |
+| `exec.weak-sandbox` | `docker`/`podman run` (or the Docker SDK) missing `--network none`, `--read-only`, `--cap-drop ALL` or a non-root `--user`; always **fail** with `--privileged`, host namespaces or the Docker socket |
+| `exec.wrapped`, `exec.annotated` (info) | call goes through an approved wrapper / is marked `toolchain-verify:sandboxed` |
+
+Report mode (default) prints warnings and exits 0; `--fail` or `[exec_lint] mode = "fail"` turns
+findings into a CI gate (exit 1). Approved wrappers: `run-isolated`, `sandbox.Command`/`sandbox.Args`,
+`oss-run`, `oss-shell`, `nsjail`, `bwrap`, `firejail`, `runsc`, plus `--wrapper NAME` /
+`[exec_lint] wrappers`. Vendored trees (`node_modules`, `vendor`, `.venv`, `site-packages`, ...) and
+test files (unless `--include-tests`) are skipped; `/`, `~` and credential stores are refused (exit 2).
+
+Ship-ready wrappers:
+
+- [examples/sandbox/run-isolated.sh](examples/sandbox/run-isolated.sh): `TV_SANDBOX_IMAGE=python:3.12-slim@sha256:... run-isolated.sh [--mount DIR] [-i] -- python3 -c "$code"` (refuses mounting `/`, `~`, system dirs and sockets; warns on unpinned images).
+- Go package [`sandbox`](sandbox/sandbox.go): `cmd, err := sandbox.Command(ctx, sandbox.Config{Image: img, Stdin: true}, "python3", "-")` builds the same invocation (rejects root users, socket and system mounts; host env is not passed).
+
+```bash
+toolchain-verify exec-lint ./                       # report mode
+toolchain-verify exec-lint --fail --json src/ > exec-lint.json   # CI gate
+```
+
+### Docker host hygiene
+
+`toolchain-verify docker` (alias `docker-hygiene`) is a read-only audit of the local engine. It reads
+`/etc/docker/daemon.json` and `docker.service` units and queries the local Docker/Podman socket with
+**GET requests only** (`/info`, `/networks`, `/containers/json?all=1`, `/containers/<id>/json`); a remote
+`DOCKER_HOST` is never contacted.
+
+| Rule | Default severity |
+|---|---|
+| `docker.public-bind`: port published on `0.0.0.0`/`::` (Docker bypasses ufw) | fail (`allow_public_bind` → info) |
+| `docker.privileged`, `docker.host-pid`, `docker.socket-mount`, `docker.cap-add` (ALL/SYS_ADMIN/SYS_MODULE) | fail |
+| `docker.host-mount`: `/`, `/etc`, `/var/lib/docker`, ... (fail if rw), credential dirs (fail), whole `~` (warn) | fail/warn |
+| `docker.latest-tag`: `:latest` or untagged image without digest | warn (`allow_latest`) |
+| `docker.group-member`: current user in the `docker` group (root-equivalent) | warn (`allow_docker_group` → info) |
+| `docker.daemon-tcp`: dockerd `-H tcp://` / `hosts` without `--tlsverify` | fail (loopback: warn) |
+| `docker.socket-perms`: world-writable engine socket | fail |
+| `docker.egress`: container with outbound network | info; warn for agent-stack images (Flowise, Langflow, n8n, Open WebUI, OpenHands, Dify, ...); fail for `egress_deny` globs or label `toolchain-verify.egress=none` |
+| `docker.host-network`, `docker.host-ipc`, `docker.unconfined` (seccomp/apparmor off) | warn |
+| `docker.root-user`, `docker.engine-unavailable` (fail with `--require-engine`) | info |
+
+Stopped containers are reported one severity lower. Configure with a `[docker]` table; HP example:
+[examples/hygiene-hp.toml](examples/hygiene-hp.toml).
+
+```bash
+toolchain-verify docker -v
+toolchain-verify docker -q -m examples/hygiene-hp.toml   # cron: silent unless something fails
+```
+
+Exit codes for `exec-lint` and `docker`: `0` pass · `1` failing findings · `2` usage/manifest error or refused target.
+
 ### Manifest
 
 ```toml
@@ -226,6 +294,19 @@ toolchain-verify agent --quarantine                # убрать подброш
 Манифест из недоверенного каталога (например, `~/Downloads`) не подхватывается
 автоматически. Модель угроз и ограничения — в [DESIGN.md](DESIGN.md).
 
+
+### Изоляция исполнения кода и гигиена Docker
+
+- `toolchain-verify exec-lint [ПУТЬ...]` — ищет `subprocess`/`exec.Command`/`child_process`/`eval`
+  в файлах, которые работают с выводом LLM (импортируют `openai`, `anthropic`, `langchain`,
+  `ollama`, MCP SDK и т. п.), если вызов не идёт через защищённый контейнер
+  `docker run --network none --read-only --cap-drop ALL --user nobody ...`. Правила
+  `exec.unwrapped`, `exec.dynamic-code`, `exec.weak-sandbox`. По умолчанию — отчёт (код 0),
+  `--fail` — ошибка для CI. Готовые обёртки: `examples/sandbox/run-isolated.sh` и Go-пакет `sandbox`.
+- `toolchain-verify docker` — проверка Docker-хоста только на чтение (GET-запросы к локальному
+  сокету): порты на `0.0.0.0` (Docker обходит ufw), `--privileged`, монтирование сокета и
+  системных каталогов, образы `:latest` без digest, пользователь в группе `docker`, dockerd на TCP,
+  лишний исходящий трафик у контейнеров. Пример для HP — `examples/hygiene-hp.toml`.
 
 ---
 
