@@ -136,6 +136,84 @@ Limits: egress is judged by network attachment (`none`, internal networks), not 
 proxies; image tags are not resolved against a registry; Kubernetes, containerd without Docker API and
 rootless engines of other users are not inspected.
 
+## Host security mode (`toolchain-verify host`)
+
+Goal: show, without root and without changing the machine, how far a developer host lags
+behind security fixes and which listening services the firewall does not account for.
+
+### Threats → rules
+
+| Threat | Rules |
+| --- | --- |
+| Known-exploited kernel bug still running (e.g. Fragnesia, CVE-2026-46300, CISA KEV) | `kernel.floor` (policy-driven: CVE + minimum package version per series), `kernel.reboot-pending`, `apt.reboot-required` |
+| Security fixes published but never installed | `apt.security-pending`, `apt.lists-stale`, `apt.no-security-source`, `apt.unattended`, `apt.dpkg-interrupted`, `apt.esm-available` |
+| Root-equivalent local escalation paths | `snap.present` (LXD), `group.lxd` |
+| Service bound to 0.0.0.0 that only needs localhost (one firewall change or a Docker port rule away from exposure) | `net.unneeded-bind` |
+| Service reachable from anywhere | `net.exposed`, `net.public-listener`, `net.no-firewall`, `net.ufw-inactive`, `net.ufw-default-allow` |
+| Stale firewall holes | `net.allow-unused` |
+
+Kernel floors live in the manifest rather than the code: CVE fixes land per series and per
+flavour (GA 5.15 vs. HWE 6.8), and new KEV entries appear faster than releases. A floor
+whose series does not match the running kernel is reported as info so a missing entry is
+visible.
+
+### Safety properties
+
+- Pure file parsing; no `exec` of apt/dpkg/ufw/ss/snap. Reads are size-capped (1 MiB for
+  small files; Packages indexes are streamed). `/proc/*/fd` scanning (process names) is
+  capped and silently skips other users' processes.
+- `--root DIR` reads a copied tree (and is how the tests run with fakes).
+- Output never includes file contents beyond package names/versions and socket endpoints.
+
+### Limits
+
+- Pending updates come from the last downloaded indexes: if `apt update` has not run, the
+  count is low — that is why list age is checked. `.lz4`/`.xz` Packages indexes are skipped
+  (Ubuntu stores plain files by default).
+- Pending updates compare against security pockets only; `-updates` is out of scope. ESM
+  counts are taken from update-notifier's cached text.
+- Reconciliation uses ufw's view only. Docker publishes ports through its own iptables
+  chains (before ufw), so a container port can be reachable despite ufw; nftables/iptables
+  rules outside ufw are not evaluated.
+- `matchingAllow` ignores rule order: a deny rule before an allow is not modelled (reported
+  as allowed — the conservative direction). Interface (`on eth0`) and destination limits
+  are recorded but not used to narrow a match.
+- `/etc/ufw/user.rules` is root-only on Ubuntu; without `--ufw-status` the tool reports
+  listeners as "reachability unknown".
+
+## Exec policy (`toolchain-verify policy`)
+
+Goal: an agent pre-exec hook that keeps build/install/test commands for untrusted OSS
+code inside the sandbox and blocks a short list of host-changing commands, following the
+OSS sandbox rules (nothing installed on the host for OSS work; `go`/`npm`/`cargo`/...
+only via `oss-run`; no `--privileged` or `docker.sock` mounts; no `gh auth` changes).
+
+Format: TOML, like the rest of the project (one parser, one validation path, comments for
+the reasons). It is a separate `[exec_policy]` section so it can live in its own file
+under `~/.config` and not inside a repository an agent can edit.
+
+Decision: the command is split into simple commands (pipelines, lists, subshells,
+substitutions, process substitution, heredoc bodies that a shell reads, `echo ... | sh`
+literal scripts). Each one is unwrapped through `sudo`/`env`/`nice`/`timeout`/`xargs`/
+`flock`/`watch`/`eval`/`sh -c` layers and matched (first matching rule wins) on every
+layer; the most restrictive verdict over all commands decides. A recognised sandbox
+wrapper (bare name resolved via `PATH`, or exact configured path) turns the remainder into
+a sandboxed command where only `everywhere` deny rules apply. A path that is named like a
+wrapper but is not the configured one (`./oss-run`) is denied.
+
+Fail-closed: unparsable input, an unknown hook payload or a missing policy blocks.
+
+### Limits
+
+- It sees the command line, not data flow. `bash build.sh`, `python3 x.py`, a Makefile on
+  the host or an alias can run anything; list such runners as `sandbox` in the policy if
+  they matter. It is a guard rail against mistakes and injected instructions, not a
+  security boundary — the container is.
+- Variable expansion is not evaluated (`$CMD args`), so `default = "host"` lets it through;
+  use `default = "sandbox"` for stricter setups.
+- Glob patterns over joined arguments are heuristics (`*--privileged*`).
+- Inside the sandbox (`/.dockerenv`) everything but `everywhere` rules is allowed.
+
 ## Layout
 
 - `internal/version` — parse/extract versions, compare, constraint grammar.
@@ -146,7 +224,9 @@ rootless engines of other users are not inspected.
 - `internal/dockerhost` — Docker/Podman host hygiene (GET-only Engine API client).
 - `internal/findings` — shared finding/collector model for the new audits.
 - `sandbox` — public Go helper that builds hardened `docker run` invocations.
-- `cmd/toolchain-verify` — CLI (`check`, `agent`/`protect`, `exec-lint`, `docker`, `init`, `version`).
+- `internal/hostsec` — host audit: dpkg versions, apt lists, unattended-upgrades, kernel floors, snaps, `/proc/net` and `ss` parsing, ufw rules/status, reconciliation.
+- `internal/execpolicy` — shell command splitter and host-vs-sandbox policy decisions.
+- `cmd/toolchain-verify` — CLI (`check`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `init`, `version`).
 
 ## Possible next steps
 

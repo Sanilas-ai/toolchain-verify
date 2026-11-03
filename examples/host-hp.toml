@@ -1,0 +1,49 @@
+# Host security policy for the HP EliteBook (Ubuntu 22.04 "jammy").
+#
+#   toolchain-verify host -m examples/host-hp.toml -v
+#   sudo ufw status verbose > /tmp/ufw.txt   # user.rules is root-only
+#   toolchain-verify host net -m examples/host-hp.toml --ufw-status /tmp/ufw.txt
+#
+# Run the sandbox-built binary on the host (the sandbox cannot see the
+# host's apt state, sockets or firewall). Everything is read-only.
+
+[host]
+# ignore = ["apt.esm-available"]
+
+[host.apt]
+security_pending_fail = 10   # >= 10 pending security updates fails
+lists_max_age_hours = 48     # jammy-security index older than 2 days warns
+lists_fail_age_days = 7
+unattended_max_age_days = 3
+reboot_max_age_days = 7
+warn_snaps = ["lxd"]
+
+# Kernel floors: one entry per CVE that must be fixed in the running
+# kernel. "min" is compared with dpkg rules against the running kernel's
+# package version (uname -r 5.15.0-202-generic + build #212 = 5.15.0-202.212).
+[[host.kernel_floor]]
+name = "Fragnesia"
+cve = "CVE-2026-46300"
+min = "5.15.0-181.191"        # Ubuntu 22.04 GA kernel fix
+refs = ["https://ubuntu.com/security/CVE-2026-46300"]
+
+[[host.kernel_floor]]
+name = "Fragnesia (HWE 6.8)"
+cve = "CVE-2026-46300"
+min = "6.8.0-124.124"
+refs = ["https://ubuntu.com/security/CVE-2026-46300"]
+
+# Local baseline: never run anything older than the kernel the HP was
+# patched to on 2026-10-15.
+[[host.kernel_floor]]
+name = "HP baseline"
+min = "5.15.0-202"
+severity = "warn"
+
+[host.net]
+# Listening on all interfaces is expected for these. xrdp (3389) and Samba
+# (137-139, 445) are deliberately NOT listed: they should be LAN-only via
+# ufw (`ufw allow from 192.168.0.0/24 to any app Samba`), which this check
+# confirms when run with --ufw-status.
+expected_public = ["22/tcp"]
+# sensitive_ports = ["2375-2376/tcp", "11434/tcp", "6379/tcp"]  # defaults include these
