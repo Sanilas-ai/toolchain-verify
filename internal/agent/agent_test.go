@@ -46,7 +46,7 @@ func (e *env) run(t *testing.T, p *Policy, cwd string, inContainer bool) *Report
 	t.Helper()
 	uid := os.Getuid()
 	rep, err := Run(p, Options{Home: e.home, Cwd: cwd, InContainer: inContainer, UID: &uid,
-		Getenv: func(k string) string { return e.vars[k] }})
+		Getenv: func(k string) string { return e.vars[k] }, NoHostInventory: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,9 +3,11 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Options carry environment facts; zero values are filled from the process.
@@ -31,10 +33,33 @@ type Options struct {
 	UID *int
 	// MaxEntries caps every directory walk (default 200000).
 	MaxEntries int
+	// AllowUntrustedCwd downgrades cwd.untrusted to a warning and lets
+	// RunPreSession pass (--allow-untrusted-cwd).
+	AllowUntrustedCwd bool
+	// Quarantine moves files behind instr.untrusted / mcp.untrusted-location
+	// findings into QuarantineDir (default: policy quarantine_dir, then
+	// DefaultQuarantineDir). Off by default: the audit is read-only.
+	Quarantine    bool
+	QuarantineDir string
+	// Now defaults to time.Now (quarantine batch names).
+	Now func() time.Time
+	// NoHostInventory disables snap / systemd / Docker inventory.
+	NoHostInventory bool
+	// DockerSocket overrides agent.docker_socket ("off" disables).
+	DockerSocket string
+	// SnapRoot (default "/snap") and SystemdDirs (default
+	// DefaultSystemdDirs) exist for tests.
+	SnapRoot    string
+	SystemdDirs []string
 }
 
 // ErrRefused is returned when the policy asks to scan a credential location.
 var ErrRefused = errors.New("refused")
+
+// ErrUntrustedCwd is returned (together with the report) by RunPreSession
+// when the working directory is an untrusted location such as Downloads or
+// /tmp. It wraps ErrRefused.
+var ErrUntrustedCwd = fmt.Errorf("%w: working directory is an untrusted location", ErrRefused)
 
 // resolved is the effective configuration.
 type resolved struct {
@@ -57,6 +82,14 @@ type resolved struct {
 	maxEntries      int
 	inContainer     bool
 	requireCont     *bool
+	allowCwd        bool
+	banUnfixed      bool
+	hostInventory   bool
+	dockerSocket    string
+	snapRoot        string
+	systemdDirs     []string
+	quarantineDir   string // "" = quarantine off
+	now             func() time.Time
 }
 
 // Resolve applies defaults and safety refusals without touching the disk
@@ -138,6 +171,38 @@ func resolve(p *Policy, opt Options) (*resolved, error) {
 	r.credFiles = dedupe(append(CredentialFiles(h), expandAll(p.CredentialPaths, h, base)...))
 	r.requireExecCont = boolOr(p.RequireContainerForExec, true)
 	r.supplyChain = boolOr(p.SupplyChain, true)
+	r.allowCwd = opt.AllowUntrustedCwd
+	r.banUnfixed = boolOr(p.BanUnfixed, false)
+	r.hostInventory = boolOr(p.HostInventory, true) && !opt.NoHostInventory
+	r.dockerSocket = opt.DockerSocket
+	if r.dockerSocket == "" && p.DockerSocket != "" {
+		r.dockerSocket = p.DockerSocket
+		if p.DockerSocket != "off" {
+			r.dockerSocket = expand(p.DockerSocket, h, base)
+		}
+	}
+	r.snapRoot = opt.SnapRoot
+	if r.snapRoot == "" {
+		r.snapRoot = "/snap"
+	}
+	r.systemdDirs = opt.SystemdDirs
+	if r.systemdDirs == nil {
+		r.systemdDirs = DefaultSystemdDirs(h)
+	}
+	r.now = opt.Now
+	if r.now == nil {
+		r.now = time.Now
+	}
+	if len(p.InventoryPaths) == 0 {
+		// npm -g / pipx with a custom prefix (the prefix in ~/.npmrc is not
+		// read: .npmrc is a credential file).
+		if v := r.getenv("NPM_CONFIG_PREFIX"); filepath.IsAbs(v) {
+			r.inventory = dedupe(append(r.inventory, filepath.Join(filepath.Clean(v), "lib")))
+		}
+		if v := r.getenv("PIPX_HOME"); filepath.IsAbs(v) {
+			r.inventory = dedupe(append(r.inventory, filepath.Join(filepath.Clean(v), "venvs")))
+		}
+	}
 
 	// Refuse to walk credential locations. A planted instruction file may try
 	// to talk an agent into "verifying" ~/.codex or ~/.config/gh with this
@@ -166,6 +231,25 @@ func resolve(p *Policy, opt Options) (*resolved, error) {
 		if t == "/" || t == r.home {
 			return nil, fmt.Errorf("%w: agent.trusted_roots entry %s would trust every instruction file below it (including Downloads); list project directories instead", ErrRefused, t)
 		}
+	}
+	if opt.Quarantine {
+		q := opt.QuarantineDir
+		if q != "" {
+			q = expand(q, h, "")
+			if !filepath.IsAbs(q) {
+				if a, err := filepath.Abs(q); err == nil {
+					q = a
+				}
+			}
+		} else if p.QuarantineDir != "" {
+			q = expand(p.QuarantineDir, h, base)
+		} else {
+			q = DefaultQuarantineDir(h)
+		}
+		if err := r.checkQuarantineDir(q); err != nil {
+			return nil, err
+		}
+		r.quarantineDir = q
 	}
 	return r, nil
 }
@@ -246,7 +330,18 @@ func Run(p *Policy, opt Options) (*Report, error) {
 
 	checkCwd(r, c)
 	mcpFiles := checkInstructions(r, c, rep)
-	installs := inventory(r, db, c, rep)
+	var hostInstalls []Install
+	if r.hostInventory {
+		var roots []string
+		roots, hostInstalls = hostInventory(r, db, c, rep)
+		for _, root := range roots {
+			if _, bad := r.credentialHit(root); bad || root == "/" || root == r.home {
+				continue
+			}
+			r.inventory = dedupe(append(r.inventory, root))
+		}
+	}
+	installs := append(inventory(r, db, c, rep), hostInstalls...)
 	rep.Installs = installs
 	execSurface := checkStacks(r, db, c, installs)
 	execSurface += checkMCP(r, c, mcpFiles)
@@ -260,20 +355,97 @@ func Run(p *Policy, opt Options) (*Report, error) {
 			Fix:     "set require_container = true in the manifest and run agents/tools inside a disposable, non-root container with an empty env and egress allow-list"})
 	}
 
+	r.finish(c, rep, strict)
+	return rep, nil
+}
+
+// finish applies quarantine and computes the verdict.
+func (r *resolved) finish(c *collector, rep *Report, strict bool) {
+	if r.quarantineDir != "" {
+		r.quarantine(c, rep)
+	}
 	rep.Findings = c.sorted()
 	rep.Ignored = c.ignored
 	fail, warn, _ := rep.Counts()
 	rep.OK = fail == 0 && (!strict || warn == 0)
+}
+
+// RunPreSession is the fast gate to run right before starting a coding
+// agent (`toolchain-verify agent --pre-session && codex`). It evaluates only
+// the working directory: cwd.untrusted, cwd.instructions,
+// cwd.ancestor-instructions and, when cwd is inside an untrusted location,
+// the instruction/MCP files below it (which --quarantine can move away).
+// Advisories, MCP settings and credentials are not checked.
+//
+// When the report keeps a failing cwd.untrusted finding (not downgraded by
+// AllowUntrustedCwd or suppressed by agent.ignore) the report is returned
+// together with ErrUntrustedCwd.
+func RunPreSession(p *Policy, opt Options) (*Report, error) {
+	r, err := resolve(p, opt)
+	if err != nil {
+		return nil, err
+	}
+	c := &collector{}
+	if p != nil {
+		c.ignore = p.Ignore
+	}
+	strict := opt.Strict || (p != nil && p.Strict)
+	rep := &Report{InContainer: r.inContainer, Home: r.home, Cwd: r.cwd, Strict: strict, TrustedRoots: r.trusted, PreSession: true}
+	checkCwd(r, c)
+	cwd := filepath.Clean(r.cwd)
+	if d, ut := r.isUntrustedDir(cwd); ut {
+		var configs []foundConfig
+		r.scanUntrustedDir(c, rep, d, cwd, &walkStats{}, &configs)
+		for _, fc := range configs {
+			c.add(Finding{Rule: "mcp.untrusted-location", Severity: r.untrustedSev, Path: fc.path,
+				Message: fmt.Sprintf("MCP/agent config in untrusted location %s; an agent started there would load its servers and permissions", fc.untrusted),
+				Fix:     "delete it unless you created it; never start agents in this directory"})
+		}
+	}
+	r.finish(c, rep, strict)
+	for _, f := range rep.Findings {
+		if f.Rule == "cwd.untrusted" && f.Severity == SevFail {
+			return rep, ErrUntrustedCwd
+		}
+	}
 	return rep, nil
 }
 
 func checkCwd(r *resolved, c *collector) {
 	cwd := filepath.Clean(r.cwd)
+	untrustedCwd := false
 	if d, bad := r.isUntrustedDir(cwd); bad {
-		c.add(Finding{Rule: "cwd.untrusted", Severity: SevFail, Path: cwd,
-			Message: fmt.Sprintf("working directory is inside untrusted location %s; coding agents started here load AGENTS.md/CLAUDE.md and MCP configs planted by browsers or archives", d),
+		untrustedCwd = true
+		sev := SevFail
+		msg := fmt.Sprintf("working directory is inside untrusted location %s; coding agents started here load AGENTS.md/CLAUDE.md and MCP configs planted by browsers or archives", d)
+		if r.allowCwd {
+			sev = SevWarn
+			msg += " (allowed by --allow-untrusted-cwd)"
+		}
+		c.add(Finding{Rule: "cwd.untrusted", Severity: sev, Path: cwd,
+			Message: msg,
 			Fix:     "cd into a trusted project (agent.trusted_roots) before starting an agent; never use Downloads or /tmp as a project root",
 			Refs:    []string{"https://www.bleepingcomputer.com/news/security/ai-coding-agents-hijacked-using-agentsmd-file-in-downloads-folder/"}})
+	}
+	// Instruction files in the working directory itself (and nested rule
+	// dirs such as .github/ or .cursor/rules) when cwd is neither trusted
+	// nor an untrusted location (those are reported by instr.untrusted):
+	// e.g. a freshly cloned or unpacked project outside the trusted roots.
+	if !untrustedCwd && cwd != r.home && !r.isTrusted(cwd) {
+		if _, bad := r.credentialHit(cwd); !bad {
+			sev := SevWarn
+			if len(r.trusted) > 0 {
+				sev = SevFail
+			}
+			for _, f := range r.cwdInstructionFiles(cwd) {
+				msg := "agent instruction file in the working directory, which is outside the trusted roots; an agent started here follows it"
+				if hits := r.scanContent(f, false); len(hits) > 0 {
+					msg += " (content flags: " + strings.Join(hits, ", ") + ")"
+				}
+				c.add(Finding{Rule: "cwd.instructions", Severity: sev, Path: f, Message: msg,
+					Fix: "review it before starting an agent here; if you trust this project add it to agent.trusted_roots (or --trusted)"})
+			}
+		}
 	}
 	if cwd == r.home {
 		c.add(Finding{Rule: "cwd.home", Severity: SevWarn, Path: cwd,
@@ -301,6 +473,27 @@ func checkCwd(r *resolved, c *collector) {
 			break
 		}
 	}
+}
+
+// cwdInstructionFiles lists instruction files in cwd up to three levels
+// deep (AGENTS.md, .github/copilot-instructions.md, .cursor/rules/x.mdc,
+// nested AGENTS.md), skipping dependency directories.
+func (r *resolved) cwdInstructionFiles(cwd string) []string {
+	var out []string
+	r.walk(cwd, 3, nil, &walkStats{}, func(p string, d fs.DirEntry) error {
+		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", ".venv", "venv", "site-packages", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if matchInstruction(p, r.instrPatterns) {
+			out = append(out, p)
+		}
+		return nil
+	})
+	return out
 }
 
 // instructionFilesIn lists instruction files directly in dir (base-name

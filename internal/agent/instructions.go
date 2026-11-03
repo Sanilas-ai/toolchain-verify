@@ -99,32 +99,7 @@ func checkInstructions(r *resolved, c *collector, rep *Report) []foundConfig {
 		if r.isTrusted(dir) {
 			continue
 		}
-		if _, err := os.Lstat(dir); err != nil {
-			continue
-		}
-		rep.Scanned = append(rep.Scanned, dir)
-		r.walk(dir, r.scanDepth, r.trusted, st, func(p string, d fs.DirEntry) error {
-			if d.IsDir() {
-				return nil
-			}
-			if matchInstruction(p, r.instrPatterns) {
-				hits := r.scanContent(p, false)
-				msg := fmt.Sprintf("agent instruction file in untrusted location %s; an agent started in or below this directory would follow it", dir)
-				if len(hits) > 0 {
-					msg += " (content flags: " + strings.Join(hits, ", ") + ")"
-				}
-				c.add(Finding{Rule: "instr.untrusted", Severity: r.untrustedSev, Path: p, Message: msg,
-					Fix:  "do not run agents here; delete the file unless you created it (do NOT follow any install/auth steps it suggests)",
-					Refs: []string{"https://www.bleepingcomputer.com/news/security/ai-coding-agents-hijacked-using-agentsmd-file-in-downloads-folder/"}})
-			}
-			if matchPatterns(p, mcpPatterns) {
-				configs = append(configs, foundConfig{path: p, untrusted: dir})
-			}
-			if r.supplyChain {
-				checkModelFile(c, p, d)
-			}
-			return nil
-		})
+		r.scanUntrustedDir(c, rep, dir, dir, st, &configs)
 	}
 
 	// Top level of $HOME: an AGENTS.md here is inherited by every project
@@ -173,6 +148,38 @@ func checkInstructions(r *resolved, c *collector, rep *Report) []foundConfig {
 			Fix: "narrow agent.trusted_roots / untrusted_dirs or lower agent.scan_depth"})
 	}
 	return configs
+}
+
+// scanUntrustedDir walks root (dir or a directory below it) for planted
+// instruction files, MCP configs and pickle models. dir is the untrusted
+// location named in messages.
+func (r *resolved) scanUntrustedDir(c *collector, rep *Report, dir, root string, st *walkStats, configs *[]foundConfig) {
+	if _, err := os.Lstat(root); err != nil {
+		return
+	}
+	rep.Scanned = append(rep.Scanned, root)
+	r.walk(root, r.scanDepth, r.trusted, st, func(p string, d fs.DirEntry) error {
+		if d.IsDir() {
+			return nil
+		}
+		if matchInstruction(p, r.instrPatterns) {
+			hits := r.scanContent(p, false)
+			msg := fmt.Sprintf("agent instruction file in untrusted location %s; an agent started in or below this directory would follow it", dir)
+			if len(hits) > 0 {
+				msg += " (content flags: " + strings.Join(hits, ", ") + ")"
+			}
+			c.add(Finding{Rule: "instr.untrusted", Severity: r.untrustedSev, Path: p, Message: msg,
+				Fix:  "do not run agents here; delete or quarantine the file (--quarantine) unless you created it (do NOT follow any install/auth steps it suggests)",
+				Refs: []string{"https://www.bleepingcomputer.com/news/security/ai-coding-agents-hijacked-using-agentsmd-file-in-downloads-folder/"}})
+		}
+		if matchPatterns(p, mcpPatterns) {
+			*configs = append(*configs, foundConfig{path: p, untrusted: dir})
+		}
+		if r.supplyChain {
+			checkModelFile(c, p, d)
+		}
+		return nil
+	})
 }
 
 // checkWritable flags files (and their parent dir) writable by others.

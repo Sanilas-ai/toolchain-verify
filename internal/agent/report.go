@@ -29,8 +29,11 @@ type Install struct {
 	Package    string   `json:"package"`
 	Version    string   `json:"version"`
 	Path       string   `json:"path"`
-	Source     string   `json:"source"` // dist-info, node_modules, pnpm, lockfile, requirements, image
+	Source     string   `json:"source"` // dist-info, node_modules, pnpm, lockfile, requirements, image, docker-image, docker-container, systemd
 	Vulnerable []string `json:"vulnerable,omitempty"`
+	// Env holds only variables named by an advisory's escalate_env, seen in
+	// a container or unit environment. Never serialized.
+	Env map[string]string `json:"-"`
 }
 
 // Report is the result of an agent run.
@@ -46,6 +49,11 @@ type Report struct {
 	Installs     []Install `json:"installs,omitempty"`
 	Findings     []Finding `json:"findings"`
 	Ignored      int       `json:"ignored,omitempty"`
+	// PreSession is set by RunPreSession (cwd-only gate).
+	PreSession bool `json:"pre_session,omitempty"`
+	// QuarantineDir and Quarantined describe files moved by --quarantine.
+	QuarantineDir string             `json:"quarantine_dir,omitempty"`
+	Quarantined   []QuarantineAction `json:"quarantined,omitempty"`
 }
 
 // Counts returns the number of findings per severity.
@@ -108,6 +116,11 @@ func sevRank(s string) int {
 
 func (c *collector) sorted() []Finding {
 	out := append([]Finding(nil), c.findings...)
+	sortFindings(out)
+	return out
+}
+
+func sortFindings(out []Finding) {
 	sort.SliceStable(out, func(i, j int) bool {
 		if a, b := sevRank(out[i].Severity), sevRank(out[j].Severity); a != b {
 			return a < b
@@ -117,5 +130,4 @@ func (c *collector) sorted() []Finding {
 		}
 		return out[i].Path < out[j].Path
 	})
-	return out
 }

@@ -67,7 +67,61 @@ toolchain-verify agent                         # defaults (+ [agent] from ./tool
 toolchain-verify agent --trusted ~/src -v      # trust instruction files only under ~/src
 toolchain-verify agent -m examples/agent-protect.toml --json
 toolchain-verify agent --list-advisories       # show the built-in advisory DB
+toolchain-verify agent --pre-session           # cheap cwd-only gate before starting an agent
+toolchain-verify agent --quarantine            # move planted instruction/MCP files out of Downloads,/tmp
 ```
+
+Before an agent session, gate the working directory (exit `3` if cwd is Downloads, Desktop,
+`/tmp`, ... or contains a planted instruction file there):
+
+```bash
+# ~/.bashrc
+codex()  { toolchain-verify agent --pre-session -q && command codex "$@"; }
+claude() { toolchain-verify agent --pre-session -q && command claude "$@"; }
+```
+
+`--allow-untrusted-cwd` downgrades only `cwd.untrusted` to a warning; planted instruction
+files in that directory still fail. Instruction files found inside a cwd that is neither a
+trusted root nor an untrusted dir are reported as `cwd.instructions` (fail when trusted roots
+are configured, warn otherwise).
+
+`--quarantine` (off by default; `[agent] quarantine_dir`, `--quarantine-dir`, default
+`~/.local/state/toolchain-verify/quarantine`) moves files flagged by `instr.untrusted` and
+`mcp.untrusted-location` to `<dir>/<UTC timestamp>/<original path>.quarantined` (mode 0600,
+with `MANIFEST.tsv` holding source path and SHA-256). It is the only write the tool ever makes;
+the quarantine dir must not be `/`, `~`, a credential store, a trusted root or an untrusted dir.
+Moved findings become warnings.
+
+Host inventory (default on; `--no-host-inventory` or `host_inventory = false` disables it)
+adds, read-only: pip user site / pipx / conda, `npm -g` (`NPM_CONFIG_PREFIX`), pnpm/bun/volta
+globals, `/snap/*/current`, systemd units (`ExecStart*`, `WorkingDirectory`, `Environment` names
+in `/etc/systemd/system`, `/lib/systemd/system`, `~/.config/systemd/user`, ... → `stack.service`)
+and Docker/Podman images and containers via `GET` requests on the local engine socket
+(`docker_socket = "off"` disables; remote `DOCKER_HOST` is skipped; unreachable engine →
+`inventory.engine-unavailable` info). Only the names of `escalate_env` variables (such as
+`ALLOW_BUILTIN_DEP`) are kept from unit/container environments, so a Flowise container started
+with `ALLOW_BUILTIN_DEP=true` fails on CVE-2026-119978. `ban_unfixed = true` makes every
+advisory without a fixed release fail ("ban until fix").
+
+| Exit | `agent` meaning |
+|---|---|
+| `0` | pass (warnings allowed unless `strict`) |
+| `1` | at least one failing finding |
+| `2` | usage error, bad policy/manifest, refused target (`/`, `~`, credential store) |
+| `3` | `--pre-session` only: cwd is untrusted — do not start an agent |
+
+Cron / CI (quiet on success, so cron mails only on problems):
+
+```bash
+# crontab -e
+17 8 * * * toolchain-verify agent -q -m ~/open-source-polygon/toolchain-verify/examples/agent-hp.toml
+# CI: fail the job on findings, keep the JSON as an artifact
+toolchain-verify agent -m policy.toml --no-host-inventory --json > agent-report.json
+```
+
+A ready GitHub Actions workflow (gofmt, vet, build, `test -race`, dry agent run) is in
+[examples/ci/github-actions-ci.yml](examples/ci/github-actions-ci.yml); copy it to
+`.github/workflows/ci.yml`.
 
 Configure it with an `[agent]` table (see [examples/agent-protect.toml](examples/agent-protect.toml)
 and [examples/agent-hp.toml](examples/agent-hp.toml)). Threat model and limits:
@@ -151,7 +205,22 @@ PraisonAI (встроенная база уязвимостей со ссылк�
 ```bash
 toolchain-verify agent --trusted ~/open-source-polygon -v
 toolchain-verify agent --list-advisories
+toolchain-verify agent --pre-session -q && codex   # не запускать агента из «Загрузок»/tmp (код 3)
+toolchain-verify agent --quarantine                # убрать подброшенные AGENTS.md/MCP в карантин
 ```
+
+- `--pre-session` — быстрая проверка только текущего каталога перед запуском агента; код
+  выхода `3`, если каталог недоверенный. `--allow-untrusted-cwd` смягчает только
+  `cwd.untrusted`, подброшенные файлы инструкций всё равно дают ошибку.
+- `--quarantine` (по умолчанию выключен) переносит файлы `instr.untrusted` и
+  `mcp.untrusted-location` в `~/.local/state/toolchain-verify/quarantine/<время UTC>/...quarantined`
+  (права 0600, `MANIFEST.tsv` с SHA-256). Это единственная запись, которую делает утилита.
+- Инвентаризация хоста (отключается `--no-host-inventory`): pip user site, pipx, conda,
+  `npm -g`, snap, юниты systemd (`stack.service`), образы и контейнеры Docker/Podman через
+  `GET`-запросы к локальному сокету. Из окружения берутся только имена переменных вроде
+  `ALLOW_BUILTIN_DEP`. `ban_unfixed = true` — запрет уязвимых версий без исправления.
+- Коды выхода: `0` — норма, `1` — есть ошибки, `2` — ошибка использования/политики или
+  запрещённая цель, `3` — `--pre-session`: недоверенный каталог. `-q` — без вывода при успехе (для cron).
 
 Настройка — таблица `[agent]` (см. [examples/agent-protect.toml](examples/agent-protect.toml)).
 Манифест из недоверенного каталога (например, `~/Downloads`) не подхватывается

@@ -30,7 +30,9 @@ const usage = `toolchain-verify — verify a development toolchain against a man
 Usage:
   toolchain-verify check [-m toolchain.toml] [--root DIR] [--json] [-v] [--timeout 10s]
   toolchain-verify agent [-m toolchain.toml] [--trusted DIR]... [--advisories FILE]...
-                         [--strict] [--json] [-v] [--list-advisories]
+                         [--strict] [--json] [-v] [-q] [--list-advisories]
+                         [--pre-session] [--allow-untrusted-cwd]
+                         [--quarantine [--quarantine-dir DIR]] [--no-host-inventory]
   toolchain-verify init  [-m toolchain.toml] [--force]
   toolchain-verify version
 
@@ -39,9 +41,18 @@ Usage:
          files, vulnerable agent stacks (Flowise, Langflow, PraisonAI, ...),
          MCP/approval settings, credential permissions, package-index setup.
          Never executes binaries and never opens credential files.
+         --pre-session   fast gate before starting an agent: only the cwd
+         --quarantine    move planted instruction/MCP files out of untrusted
+                         dirs (the only option that changes anything)
 
-Exit codes: 0 all checks passed, 1 a check failed, 2 usage or manifest error.
+Exit codes: 0 all checks passed, 1 a check failed, 2 usage, manifest or
+refused-configuration error, 3 agent refused an untrusted working directory
+(--pre-session).
 `
+
+// exitUntrustedCwd is returned by `agent --pre-session` when the working
+// directory is an untrusted location (Downloads, /tmp, ...).
+const exitUntrustedCwd = 3
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -216,7 +227,18 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 	list := fs.Bool("list-advisories", false, "print the advisory database and exit")
 	home := fs.String("home", "", "home directory to audit (default: current user's)")
 	cwdFlag := fs.String("cwd", "", "working directory to evaluate (default: current)")
+	preSession := fs.Bool("pre-session", false, "only check the working directory; exit 3 if it is untrusted (run before starting an agent)")
+	allowCwd := fs.Bool("allow-untrusted-cwd", false, "downgrade cwd.untrusted to a warning (and let --pre-session pass)")
+	quarantine := fs.Bool("quarantine", false, "move planted instruction/MCP files found in untrusted dirs into the quarantine dir")
+	quarantineDir := fs.String("quarantine-dir", "", "quarantine destination (default agent.quarantine_dir or ~/.local/state/toolchain-verify/quarantine)")
+	noHost := fs.Bool("no-host-inventory", false, "skip snap, systemd and Docker/Podman engine inventory")
+	quiet := fs.Bool("q", false, "quiet: print nothing when the run passes (cron)")
+	fs.BoolVar(quiet, "quiet", false, "quiet: print nothing when the run passes (cron)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *quarantineDir != "" && !*quarantine {
+		fmt.Fprintln(stderr, "error: --quarantine-dir needs --quarantine")
 		return 2
 	}
 	if fs.NArg() > 0 {
@@ -244,7 +266,8 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 
 	var pol *agent.Policy
 	opt := agent.Options{Home: h, Cwd: cwd, InContainer: check.DetectContainer(), ExtraTrusted: trusted,
-		ExtraAdvisories: advisories, NoBuiltinAdvisories: *noBuiltin, Strict: *strict}
+		ExtraAdvisories: advisories, NoBuiltinAdvisories: *noBuiltin, Strict: *strict,
+		AllowUntrustedCwd: *allowCwd, Quarantine: *quarantine, QuarantineDir: *quarantineDir, NoHostInventory: *noHost}
 	explicit := flagSet(fs, "m", "manifest")
 	mpath := *path
 	if !explicit {
@@ -270,18 +293,30 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 		opt.RequireContainer = m.RequireContainer
 		opt.ManifestDir = m.Dir
 	}
-	rep, err := agent.Run(pol, opt)
-	if err != nil {
+	var rep *agent.Report
+	var err error
+	if *preSession {
+		rep, err = agent.RunPreSession(pol, opt)
+	} else {
+		rep, err = agent.Run(pol, opt)
+	}
+	if err != nil && !errors.Is(err, agent.ErrUntrustedCwd) {
 		fmt.Fprintln(stderr, "error:", err)
 		return 2
 	}
-	if *asJSON {
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		enc.SetEscapeHTML(false)
-		_ = enc.Encode(rep)
-	} else {
-		printAgent(stdout, rep, *verbose)
+	if !(*quiet && rep.OK && err == nil) {
+		if *asJSON {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			enc.SetEscapeHTML(false)
+			_ = enc.Encode(rep)
+		} else {
+			printAgent(stdout, rep, *verbose)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "refused: %s is an untrusted working directory; do not start a coding agent here (cd into a trusted project, or pass --allow-untrusted-cwd)\n", rep.Cwd)
+		return exitUntrustedCwd
 	}
 	if !rep.OK {
 		return 1
@@ -294,7 +329,11 @@ func printAgent(w io.Writer, rep *agent.Report, verbose bool) {
 	if rep.InContainer {
 		ctx = "container"
 	}
-	fmt.Fprintf(w, "toolchain-verify agent: cwd %s (running in %s; advisories updated %s)\n", rep.Cwd, ctx, rep.AdvisoryDB)
+	if rep.PreSession {
+		fmt.Fprintf(w, "toolchain-verify agent --pre-session: cwd %s (running in %s)\n", rep.Cwd, ctx)
+	} else {
+		fmt.Fprintf(w, "toolchain-verify agent: cwd %s (running in %s; advisories updated %s)\n", rep.Cwd, ctx, rep.AdvisoryDB)
+	}
 	if len(rep.TrustedRoots) == 0 {
 		fmt.Fprintln(w, "  note: no trusted roots configured (agent.trusted_roots / --trusted)")
 	} else if verbose {
@@ -323,6 +362,16 @@ func printAgent(w io.Writer, rep *agent.Report, verbose bool) {
 				v = " [" + strings.Join(in.Vulnerable, ", ") + "]"
 			}
 			fmt.Fprintf(w, "    %s %s %s (%s) %s%s\n", in.Stack, in.Package, in.Version, in.Source, in.Path, v)
+		}
+	}
+	if len(rep.Quarantined) > 0 {
+		fmt.Fprintf(w, "  quarantine: %s\n", rep.QuarantineDir)
+		for _, q := range rep.Quarantined {
+			if q.Error != "" {
+				fmt.Fprintf(w, "    FAILED  %s: %s\n", q.From, q.Error)
+			} else {
+				fmt.Fprintf(w, "    moved   %s -> %s\n", q.From, q.To)
+			}
 		}
 	}
 	fail, warn, info := rep.Counts()

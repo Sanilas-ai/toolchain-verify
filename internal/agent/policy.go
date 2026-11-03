@@ -63,6 +63,23 @@ type Policy struct {
 	// SupplyChain (default true) enables index/registry, pickle-model and
 	// .pth startup-hook checks.
 	SupplyChain *bool `toml:"supply_chain"`
+	// QuarantineDir is where `agent --quarantine` moves planted instruction
+	// and MCP files (default ~/.local/state/toolchain-verify/quarantine).
+	// It must not be inside an untrusted dir, a trusted root or a
+	// credential store.
+	QuarantineDir string `toml:"quarantine_dir"`
+	// BanUnfixed (default false): advisories without a fixed release fail
+	// even when they are marked conditional ("ban until fix", e.g. Flowise
+	// <=3.1.4 / CVE-2026-119978).
+	BanUnfixed *bool `toml:"ban_unfixed"`
+	// HostInventory (default true) adds read-only host sources to the
+	// inventory: snap payloads, systemd unit ExecStart/WorkingDirectory and
+	// the local Docker/Podman Engine API (GET only: images, containers).
+	HostInventory *bool `toml:"host_inventory"`
+	// DockerSocket overrides the Engine API unix socket ("off" disables).
+	// Default: DOCKER_HOST (unix:// only), /var/run/docker.sock, then the
+	// rootless Docker / Podman sockets under $XDG_RUNTIME_DIR.
+	DockerSocket string `toml:"docker_socket"`
 	// Strict makes warnings fail the run.
 	Strict bool `toml:"strict"`
 	// Ignore suppresses findings: entries are "rule" or "rule:path-glob".
@@ -80,7 +97,8 @@ var DefaultInstructionFiles = []string{
 	".clinerules", ".clinerules/*", // Cline
 	".roorules", ".roo/rules/*", // Roo Code
 	".github/copilot-instructions.md", ".github/instructions/*.instructions.md", // Copilot
-	".junie/guidelines.md", // JetBrains Junie
+	"copilot-instructions.md", // Copilot file saved outside .github (e.g. by a browser)
+	".junie/guidelines.md",    // JetBrains Junie
 }
 
 // Defaults returns the default untrusted directories for home.
@@ -105,8 +123,15 @@ func DefaultInventoryPaths(home string) []string {
 		filepath.Join(home, ".local", "lib"),
 		filepath.Join(home, ".local", "share", "pipx", "venvs"),
 		filepath.Join(home, ".local", "share", "uv", "tools"),
+		filepath.Join(home, ".local", "pipx", "venvs"), // pipx < 1.3
 		filepath.Join(home, ".npm-global"),
+		filepath.Join(home, ".local", "share", "pnpm"), // pnpm add -g
+		filepath.Join(home, ".bun", "install", "global"),
+		filepath.Join(home, ".volta", "tools", "image", "packages"),
 		filepath.Join(home, ".nvm", "versions", "node"),
+		filepath.Join(home, "miniconda3"),
+		filepath.Join(home, "miniforge3"),
+		filepath.Join(home, "anaconda3"),
 		filepath.Join(home, ".venv"),
 		"/usr/local/lib",
 		"/usr/lib/python3",
@@ -169,6 +194,9 @@ func xdgDownloadDir(home string) string {
 
 // Validate checks enum values and obviously wrong settings.
 func (p *Policy) Validate() error {
+	if p.DockerSocket != "" && p.DockerSocket != "off" && !strings.HasPrefix(p.DockerSocket, "~") && !strings.HasPrefix(p.DockerSocket, "$HOME") && !filepath.IsAbs(p.DockerSocket) {
+		return fmt.Errorf("agent.docker_socket must be an absolute path or \"off\", got %q", p.DockerSocket)
+	}
 	switch p.UntrustedInstruction {
 	case "", "fail", "warn":
 	default:
