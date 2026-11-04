@@ -120,10 +120,9 @@ toolchain-verify agent -m policy.toml --no-host-inventory --json > agent-report.
 ```
 
 A ready GitHub Actions workflow (gofmt, vet, build, `test -race`, dry agent run) is in
-[examples/ci/github-actions-ci.yml](examples/ci/github-actions-ci.yml); copy it to
-`.github/workflows/ci.yml`. It is not installed yet: GitHub refuses pushes that touch
-`.github/workflows/*` from a token without the `workflow` scope, so it has to be added with
-such a token (`gh auth refresh -s workflow`) or through the GitHub web UI.
+[examples/ci/github-actions-ci.yml](examples/ci/github-actions-ci.yml) and is installed for
+this repo as [.github/workflows/ci.yml](.github/workflows/ci.yml); copy it to the same path in
+your own repo (pushing `.github/workflows/*` needs a token with the `workflow` scope).
 
 Configure it with an `[agent]` table (see [examples/agent-protect.toml](examples/agent-protect.toml)
 and [examples/agent-hp.toml](examples/agent-hp.toml)). Threat model and limits:
