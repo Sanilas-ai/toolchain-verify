@@ -37,6 +37,7 @@ toolchain-verify check                 # verify ./toolchain.toml against PATH
 toolchain-verify check -m ci.toml -v   # verbose: resolved paths + SHA-256 digests
 toolchain-verify check --root /opt/sdk # search /opt/sdk/bin and /opt/sdk instead of PATH
 toolchain-verify check --json          # machine-readable report
+toolchain-verify pin                   # record installed versions + SHA-256 into ./toolchain.toml
 ```
 
 Exit codes: `0` all checks passed · `1` a check failed · `2` usage or manifest error.
@@ -341,7 +342,30 @@ Version constraints: `1.22.3` (exact), `1.22` / `1.22.x` / `1.*` (wildcard),
 Examples: [`examples/toolchain.toml`](examples/toolchain.toml) (go, node, python3, git),
 [`examples/oss-sandbox.toml`](examples/oss-sandbox.toml) (pinned to the sandbox image paths).
 
-To pin hashes: run `toolchain-verify check -v` in a trusted environment and copy the printed `sha256` values.
+### Pinning (`pin`)
+
+`toolchain-verify pin` probes every `[[tool]]` the same way `check` does and writes what
+is installed now back into the manifest, in place: comments, key order and all other
+sections are kept; existing keys are replaced, missing ones are added at the end of the
+tool's entry. Run it in a trusted environment (e.g. inside the sandbox image you build
+with), review the diff, commit.
+
+```bash
+toolchain-verify pin                          # version = "1.27.3" + sha256 for every tool
+toolchain-verify pin --version caret          # version = "^1.27.3" (also: tilde, min, keep)
+toolchain-verify pin --tool go --tool git     # only these tools
+toolchain-verify pin --path                   # also pin the found binary path
+toolchain-verify pin --no-sha256 --dry-run    # show changes, write nothing
+```
+
+- Nothing is written if any required tool is missing or its version cannot be read
+  (exit `1`); a missing `optional = true` tool is skipped and left unchanged.
+- If the manifest sets `require_container` and pin runs in the other context, it refuses
+  (exit `2`) so host hashes never end up in a sandbox manifest (`--ignore-container` overrides).
+- Like `check`, an implicit `./toolchain.toml` in Downloads, `/tmp`, ... is refused.
+- The edit is verified: the rewritten file is decoded again and must differ from the
+  original only in the pinned keys, otherwise nothing is written. A symlinked manifest is
+  updated through the link; file permissions are kept.
 
 ---
 
@@ -359,7 +383,13 @@ To pin hashes: run `toolchain-verify check -v` in a trusted environment and copy
 toolchain-verify init          # создать пример toolchain.toml
 toolchain-verify check         # проверить текущее окружение
 toolchain-verify check -v      # показать реальные пути (после симлинков) и SHA-256
+toolchain-verify pin           # записать текущие версии и SHA-256 в toolchain.toml
 ```
+
+`pin` обновляет манифест на месте (комментарии и остальные секции сохраняются):
+`--version exact|tilde|caret|min|keep`, `--no-sha256`, `--path`, `--tool NAME`, `--dry-run`.
+Если какой-то обязательный инструмент не найден или версия не читается — файл не
+меняется (код `1`). Запускайте в доверенном окружении (например, в песочнице).
 
 В Docker-песочнице OSS (на хост ничего не ставится):
 
