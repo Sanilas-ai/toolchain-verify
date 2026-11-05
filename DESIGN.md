@@ -12,7 +12,7 @@ Non-zero exit stops the pipeline.
 | Threat | Example | Mitigation |
 |---|---|---|
 | **Wrong binary on PATH** | `~/.local/bin/node` shadows the system node; a planted `git` in a writable dir early in PATH; `.` or an empty entry in `PATH` | Report the found *and* symlink-resolved path; optional `path` glob; optional `sha256`; relative/empty `PATH` entries are never searched |
-| **Tampered / replaced binary** | Same path, different contents after a compromised package or manual copy | `sha256` of the resolved file (pin from a trusted environment with `check -v`) |
+| **Tampered / replaced binary** | Same path, different contents after a compromised package or manual copy | `sha256` of the resolved file (record from a trusted environment with `pin`) |
 | **Version drift** | Image rebuilt with Go 1.27 while the project expects 1.22.x; node 18 vs 22 | `version` constraints (exact, wildcard, ranges, `~`, `^`, `||`) |
 | **Host vs sandbox mismatch** | Tests accidentally run on the host instead of the `oss-sandbox` container, using host tools and host credentials | `require_container = true` (or `false` for host-only manifests); detection via `/.dockerenv`, `/run/.containerenv`, `$container`, `/proc/1/cgroup` |
 | **Silent misconfiguration** | Typo `sha265 = ...` disables the hash check | Unknown manifest keys are a hard error; invalid constraints, regexes and digests are rejected at load time |
@@ -270,8 +270,11 @@ store is consistent with its manifests and the running API.
 ## Layout
 
 - `internal/version` — parse/extract versions, compare, constraint grammar.
-- `internal/manifest` — strict TOML loading and validation.
-- `internal/check` — locate, resolve symlinks, hash, probe, report.
+- `internal/manifest` — strict TOML loading and validation; `EditTools`, a line-level
+  editor for `[[tool]]` keys used by `pin` (keeps comments/layout, re-decodes the result and
+  refuses any change beyond the requested keys).
+- `internal/check` — locate, resolve symlinks, hash, probe, report; `Inspect` returns the
+  observed facts without comparing them (used by `pin`).
 - `internal/agent` — agent-protection audit: policy, instruction files, inventory, advisories, MCP, credentials, supply chain.
 - `internal/execlint` — code-exec isolation lint.
 - `internal/dockerhost` — Docker/Podman host hygiene (GET-only Engine API client).
@@ -280,9 +283,13 @@ store is consistent with its manifests and the running API.
 - `internal/hostsec` — host audit: dpkg versions, apt lists, unattended-upgrades, kernel floors, snaps, `/proc/net` and `ss` parsing, ufw rules/status, reconciliation.
 - `internal/execpolicy` — shell command splitter and host-vs-sandbox policy decisions.
 - `internal/models` — model artifact scan: format sniffing, pickle opcode walk, safetensors/GGUF checks, Ollama store/API report, external scanners.
-- `cmd/toolchain-verify` — CLI (`check`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `models`, `init`, `version`).
+- `cmd/toolchain-verify` — CLI (`check`, `pin`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `models`, `init`, `version`).
 
 ## Possible next steps
 
-`pin` subcommand that writes current versions/hashes into the manifest; env-var checks
+Done: `pin` subcommand that writes current versions/hashes (and optionally paths) into the
+manifest. Still open for `pin`: pinning `version_regex`/`version_args` for new tools,
+`--json` output, and adding tools that are not yet in the manifest.
+
+Next: env-var checks
 (`GOFLAGS`, `NODE_OPTIONS`); signed manifests; GitHub Action wrapper; archive (zip) scanning in Downloads; extension audit.

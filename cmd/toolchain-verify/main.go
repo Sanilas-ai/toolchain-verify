@@ -45,10 +45,16 @@ Usage:
   toolchain-verify models [-m toolchain.toml] [--ollama-dir DIR]... [--ollama-url URL]
                           [--verify-blobs] [--no-ollama] [--external auto|require|off]
                           [--strict] [--json] [-v] [--list] [PATH]...
+  toolchain-verify pin   [-m toolchain.toml] [--root DIR] [--version exact|tilde|caret|min|keep]
+                         [--no-sha256] [--path] [--tool NAME]... [--dry-run] [--ignore-container]
   toolchain-verify init  [-m toolchain.toml] [--force]
   toolchain-verify version
 
   check  verify tool versions/paths/hashes (runs each tool's version probe)
+  pin    record what is installed now: probe each [[tool]] and write its
+         version (exact by default) and sha256 (and path with --path) into
+         the manifest in place; comments and other sections are kept.
+         Nothing is written if any required tool cannot be inspected.
   agent  read-only agent-protection audit: planted AGENTS.md/CLAUDE.md/rules
          files, vulnerable agent stacks (Flowise, Langflow, PraisonAI, ...),
          MCP/approval settings, credential permissions, package-index setup.
@@ -97,6 +103,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdCheck(args[1:], stdout, stderr)
 	case "init":
 		return cmdInit(args[1:], stdout, stderr)
+	case "pin":
+		return cmdPin(args[1:], stdout, stderr)
 	case "agent", "protect":
 		return cmdAgent(args[1:], stdout, stderr)
 	case "exec-lint":
@@ -133,17 +141,10 @@ func cmdCheck(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if !flagSet(fs, "m", "manifest") && !*allowUntrusted {
-		// `check` executes the commands named in the manifest. A toolchain.toml
-		// planted in Downloads or /tmp must never be picked up implicitly.
-		if cwd, err := os.Getwd(); err == nil {
-			if home, err := os.UserHomeDir(); err == nil {
-				if d, bad := agent.UntrustedCwd(cwd, home, nil); bad {
-					fmt.Fprintf(stderr, "error: refusing to load ./%s from untrusted directory %s (it would run the commands it names); pass -m explicitly or --allow-untrusted-cwd\n", manifest.DefaultFile, d)
-					return 2
-				}
-			}
-		}
+	// `check` executes the commands named in the manifest. A toolchain.toml
+	// planted in Downloads or /tmp must never be picked up implicitly.
+	if !flagSet(fs, "m", "manifest") && !*allowUntrusted && untrustedImplicitManifest(stderr) {
+		return 2
 	}
 	m, err := manifest.Load(*path)
 	if err != nil {

@@ -33,7 +33,7 @@ version = ">=3.10"
 name = "git"
 version = ">=2.30"
 version_regex = 'git version (?P<version>\d+\.\d+(\.\d+)?)'
-# sha256 = "<run `toolchain-verify check -v` to print the current digest>"
+# sha256 = "<run `toolchain-verify pin` to record the current digest>"
 
 # Agent protection (`toolchain-verify agent`): uncomment to trust instruction
 # files (AGENTS.md, CLAUDE.md, .cursorrules, ...) only under your project roots.
