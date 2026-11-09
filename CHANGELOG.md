@@ -4,6 +4,15 @@ All notable changes to toolchain-verify are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [SemVer](https://semver.org/).
 
+## [0.1.3] — 2026-11-09
+
+### Fixed
+- `unicode.tag-smuggling`: FAIL only in agent-control files or when the decoded
+  Tag payload carries instruction signals. Test/WPT/fixture paths without
+  signals are demoted to info (Deno WPT hostname fixtures were a mass-scan FP).
+
+[0.1.3]: https://github.com/Sanilas-ai/toolchain-verify/releases/tag/v0.1.3
+
 ## [0.1.2] — 2026-11-09
 
 ### Fixed
