@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+project_name: toolchain-verify
+
+before:
+  hooks:
+    - go mod tidy
+    - go test -count=1 ./...
+
+builds:
+  - id: toolchain-verify
+    main: ./cmd/toolchain-verify
+    binary: toolchain-verify
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.buildVersion={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+sboms:
+  - id: archive
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.spdx.json"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: Sanilas-ai
+    name: toolchain-verify
+  name_template: "toolchain-verify {{.Tag}}"
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Verify
+
+    ```bash
+    curl -fsSL -O https://github.com/Sanilas-ai/toolchain-verify/releases/download/{{.Tag}}/SHA256SUMS
+    curl -fsSL -O https://github.com/Sanilas-ai/toolchain-verify/releases/download/{{.Tag}}/toolchain-verify_{{.Version}}_linux_amd64.tar.gz
+    sha256sum -c SHA256SUMS --ignore-missing
+    ```
+
+    ## GitHub Action
+
+    ```yaml
+    - uses: Sanilas-ai/toolchain-verify@{{.Tag}}
+      with:
+        command: scan
+        path: .
+        format: sarif
+    ```

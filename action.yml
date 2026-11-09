@@ -1,0 +1,88 @@
+name: "toolchain-verify"
+description: "Download a release binary of toolchain-verify, verify its SHA-256, and run scan (or another command) in CI."
+author: "Sanilas-ai"
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  command:
+    description: "Subcommand to run (scan, agent, mcp-tools, check, ...)"
+    required: false
+    default: "scan"
+  path:
+    description: "Path argument for scan/agent/exec-lint (ignored by some commands)"
+    required: false
+    default: "."
+  format:
+    description: "Output format for scan/mcp-tools: text, json, or sarif"
+    required: false
+    default: "sarif"
+  fail-on:
+    description: "When to fail the step: fail (default), warn (treat warnings as failures), or never"
+    required: false
+    default: "fail"
+  version:
+    description: "Release tag to download (e.g. v0.1.0). Defaults to the action ref when it is a tag."
+    required: false
+    default: ""
+  args:
+    description: "Extra CLI arguments appended after the subcommand"
+    required: false
+    default: ""
+  upload-sarif:
+    description: "Upload SARIF to GitHub code scanning when format=sarif"
+    required: false
+    default: "true"
+  github-token:
+    description: "Token used to download the release (defaults to github.token)"
+    required: false
+    default: ""
+  working-directory:
+    description: "Working directory for the CLI run"
+    required: false
+    default: "."
+
+outputs:
+  report-path:
+    description: "Path to the written report file (JSON or SARIF), if any"
+    value: ${{ steps.run.outputs.report-path }}
+  verdict:
+    description: "PASS, WARN, FAIL, or INCOMPLETE when the command reports one"
+    value: ${{ steps.run.outputs.verdict }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install toolchain-verify
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.github-token || github.token }}
+      run: bash "${{ github.action_path }}/scripts/action-install.sh"
+
+    - name: Run toolchain-verify
+      id: run
+      shell: bash
+      env:
+        TV_BIN: ${{ steps.install.outputs.binary }}
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_WORKDIR: ${{ inputs.working-directory }}
+      run: bash "${{ github.action_path }}/scripts/action-run.sh"
+
+    - name: Upload SARIF
+      if: >-
+        always() &&
+        inputs.upload-sarif == 'true' &&
+        inputs.format == 'sarif' &&
+        steps.run.outputs.report-path != ''
+      uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+      with:
+        sarif_file: ${{ steps.run.outputs.report-path }}
+        category: toolchain-verify
