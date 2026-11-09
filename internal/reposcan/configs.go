@@ -616,13 +616,21 @@ func (s *scanner) scanPackageHook(rel string, b []byte) {
 // agent's privileges when the skill is used (Cisco skill-scanner threat
 // model). HTTP + subprocess is normal for tools, so only decode->exec,
 // secret->network, pipe-to-shell and IOCs fail; download-and-run warns.
+// process.env / os.environ alone plus HTTP is not enough for
+// skill.secret-exfil — nearly every real skill tool reads env and calls
+// an API. Require a strong credential path or named token (see
+// strongSecretRead).
 func (s *scanner) judgeSkillScript(rel string, b []byte) {
 	canon := canonical(string(b))
 	sig := signals(canon)
 	var rule, sev string
 	switch r, _ := verdictFor(sig, false); {
-	case r == "injection.secret-exfil" || r == "injection.decode-exec":
-		rule, sev = "skill."+strings.TrimPrefix(r, "injection."), SevFail
+	case r == "injection.secret-exfil":
+		if strongSecretRead(canon) {
+			rule, sev = "skill.secret-exfil", SevFail
+		}
+	case r == "injection.decode-exec":
+		rule, sev = "skill.decode-exec", SevFail
 	case sig[sigPipeShell]:
 		rule, sev = "skill.pipe-to-shell", SevFail
 	case sig[sigExfil]:
