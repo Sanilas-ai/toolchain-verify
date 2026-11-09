@@ -36,6 +36,15 @@ type Install struct {
 	Env map[string]string `json:"-"`
 }
 
+// ExecSurface is one exec-capable agent tool surface that contributes to
+// policy.require-container: an agent stack that can run code, a stdio MCP
+// server (local process), or an approval-bypass setting.
+type ExecSurface struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"` // agent-stack | stdio-mcp | approval-bypass
+	Why  string `json:"why"`
+}
+
 // Report is the result of an agent run.
 type Report struct {
 	InContainer  bool      `json:"in_container"`
@@ -47,8 +56,11 @@ type Report struct {
 	TrustedRoots []string  `json:"trusted_roots"`
 	Scanned      []string  `json:"scanned"`
 	Installs     []Install `json:"installs,omitempty"`
-	Findings     []Finding `json:"findings"`
-	Ignored      int       `json:"ignored,omitempty"`
+	// ExecSurfaces lists every exec-capable surface (also mirrored as
+	// policy.exec-surface findings for text/JSON/SARIF consumers).
+	ExecSurfaces []ExecSurface `json:"exec_surfaces,omitempty"`
+	Findings     []Finding     `json:"findings"`
+	Ignored      int           `json:"ignored,omitempty"`
 	// PreSession is set by RunPreSession (cwd-only gate).
 	PreSession bool `json:"pre_session,omitempty"`
 	// QuarantineDir and Quarantined describe files moved by --quarantine.
@@ -130,4 +142,80 @@ func sortFindings(out []Finding) {
 		}
 		return out[i].Path < out[j].Path
 	})
+}
+
+// SARIF converts findings to SARIF 2.1.0 for GitHub code scanning upload.
+// policy.exec-surface findings carry path/kind/why so surfaces appear as
+// locations; ExecSurfaces on the JSON report is the structured twin.
+func (r *Report) SARIF(version string) any {
+	type sarifMessage struct {
+		Text string `json:"text"`
+	}
+	type sarifArtifact struct {
+		URI string `json:"uri"`
+	}
+	type sarifPhysical struct {
+		ArtifactLocation sarifArtifact `json:"artifactLocation"`
+	}
+	type sarifLocation struct {
+		PhysicalLocation sarifPhysical `json:"physicalLocation"`
+	}
+	type sarifResult struct {
+		RuleID    string          `json:"ruleId"`
+		Level     string          `json:"level"`
+		Message   sarifMessage    `json:"message"`
+		Locations []sarifLocation `json:"locations,omitempty"`
+	}
+	type sarifRule struct {
+		ID string `json:"id"`
+	}
+	type sarifDriver struct {
+		Name           string      `json:"name"`
+		Version        string      `json:"version,omitempty"`
+		InformationURI string      `json:"informationUri"`
+		Rules          []sarifRule `json:"rules"`
+	}
+	type sarifTool struct {
+		Driver sarifDriver `json:"driver"`
+	}
+	type sarifRun struct {
+		Tool    sarifTool     `json:"tool"`
+		Results []sarifResult `json:"results"`
+	}
+	type sarifLog struct {
+		Schema  string     `json:"$schema"`
+		Version string     `json:"version"`
+		Runs    []sarifRun `json:"runs"`
+	}
+
+	seen := map[string]bool{}
+	var rules []sarifRule
+	var res []sarifResult
+	for _, f := range r.Findings {
+		if !seen[f.Rule] {
+			seen[f.Rule] = true
+			rules = append(rules, sarifRule{ID: f.Rule})
+		}
+		lvl := "note"
+		switch f.Severity {
+		case SevFail:
+			lvl = "error"
+		case SevWarn:
+			lvl = "warning"
+		}
+		sr := sarifResult{RuleID: f.Rule, Level: lvl, Message: sarifMessage{Text: f.Message}}
+		if f.Path != "" {
+			sr.Locations = []sarifLocation{{PhysicalLocation: sarifPhysical{ArtifactLocation: sarifArtifact{URI: f.Path}}}}
+		}
+		res = append(res, sr)
+	}
+	if res == nil {
+		res = []sarifResult{}
+	}
+	if rules == nil {
+		rules = []sarifRule{}
+	}
+	return sarifLog{Schema: "https://json.schemastore.org/sarif-2.1.0.json", Version: "2.1.0",
+		Runs: []sarifRun{{Tool: sarifTool{Driver: sarifDriver{Name: "toolchain-verify agent", Version: version,
+			InformationURI: "https://github.com/Sanilas-ai/toolchain-verify", Rules: rules}}, Results: res}}}
 }

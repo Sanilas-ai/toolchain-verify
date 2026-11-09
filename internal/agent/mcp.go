@@ -47,7 +47,7 @@ type mcpServer struct {
 	disabled    bool
 }
 
-func checkMCP(r *resolved, c *collector, found []foundConfig) int {
+func checkMCP(r *resolved, c *collector, found []foundConfig) []ExecSurface {
 	byPath := map[string]foundConfig{}
 	for _, rel := range DefaultMCPConfigs {
 		p := filepath.Join(r.home, filepath.FromSlash(rel))
@@ -73,7 +73,7 @@ func checkMCP(r *resolved, c *collector, found []foundConfig) int {
 	}
 	sort.Strings(paths)
 
-	surface := 0
+	var surfaces []ExecSurface
 	for _, p := range paths {
 		fc := byPath[p]
 		if _, bad := r.credentialFileHit(p); bad {
@@ -103,12 +103,12 @@ func checkMCP(r *resolved, c *collector, found []foundConfig) int {
 			c.add(Finding{Rule: "mcp.parse", Severity: SevWarn, Path: p, Message: "cannot parse JSON: " + err.Error()})
 			continue
 		}
-		surface += auditAgentSettings(r, c, p, doc)
+		surfaces = append(surfaces, auditAgentSettings(r, c, p, doc)...)
 		for _, s := range extractServers(doc) {
-			surface += auditServer(r, c, p, s)
+			surfaces = append(surfaces, auditServer(r, c, p, s)...)
 		}
 	}
-	return surface
+	return surfaces
 }
 
 // extractServers finds MCP server maps under the keys used by Cursor,
@@ -245,12 +245,12 @@ var runners = map[string]bool{"npx": true, "bunx": true, "uvx": true, "pnpx": tr
 var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "fish": true, "cmd": true, "cmd.exe": true, "powershell": true, "pwsh": true, "powershell.exe": true}
 var pipeShellRe = regexp.MustCompile(`(?i)\b(curl|wget)\b.*\|\s*(sudo\s+)?(ba|z|da)?sh\b`)
 
-func auditServer(r *resolved, c *collector, path string, s mcpServer) int {
+func auditServer(r *resolved, c *collector, path string, s mcpServer) []ExecSurface {
 	if s.disabled {
-		return 0
+		return nil
 	}
 	id := fmt.Sprintf("server %q", s.name)
-	surface := 0
+	var surfaces []ExecSurface
 	remote := false
 	if s.url != "" {
 		u, err := url.Parse(s.url)
@@ -289,11 +289,17 @@ func auditServer(r *resolved, c *collector, path string, s mcpServer) int {
 		c.add(Finding{Rule: "mcp.auto-approve", Severity: sev, Path: path,
 			Message: id + ": " + what + "; a prompt injection can call them without a human gate",
 			Fix:     "remove autoApprove/alwaysAllow/trust for tools that write, execute, spend or reach the network"})
-		surface++
+		surfaces = append(surfaces, ExecSurface{
+			Path: path, Kind: "approval-bypass",
+			Why: fmt.Sprintf("%s: %s (MCP approval bypass)", id, what),
+		})
 	}
 	if s.command != "" {
-		surface++
 		cmd := strings.ToLower(filepath.Base(s.command))
+		surfaces = append(surfaces, ExecSurface{
+			Path: path, Kind: "stdio-mcp",
+			Why: fmt.Sprintf("%s: stdio MCP server runs local command %q (model-controlled tool calls become process exec)", id, s.command),
+		})
 		args := s.args
 		joined := s.command + " " + strings.Join(args, " ")
 		if pipeShellRe.MatchString(joined) {
@@ -325,7 +331,7 @@ func auditServer(r *resolved, c *collector, path string, s mcpServer) int {
 				Message: fmt.Sprintf("%s: header %s holds a literal secret in the config file (value not shown)", id, k)})
 		}
 	}
-	return surface
+	return surfaces
 }
 
 func runnerPackage(cmd string, args []string) (pkg string, pinned bool) {
@@ -396,8 +402,8 @@ func hasArgPrefix(list []string, subs ...string) bool {
 }
 
 // auditAgentSettings looks at approval / sandbox settings of agent CLIs.
-func auditAgentSettings(r *resolved, c *collector, path string, doc map[string]any) int {
-	surface := 0
+func auditAgentSettings(r *resolved, c *collector, path string, doc map[string]any) []ExecSurface {
+	var surfaces []ExecSurface
 	base := filepath.Base(path)
 	// Claude Code settings.json
 	if perms, ok := doc["permissions"].(map[string]any); ok {
@@ -405,12 +411,14 @@ func auditAgentSettings(r *resolved, c *collector, path string, doc map[string]a
 			c.add(Finding{Rule: "agent.approval-bypass", Severity: SevWarn, Path: path,
 				Message: "permissions.defaultMode = bypassPermissions: every tool call (shell, file writes, network) runs without confirmation",
 				Fix:     "use the default mode, or run bypass mode only inside a disposable container"})
-			surface++
+			surfaces = append(surfaces, ExecSurface{Path: path, Kind: "approval-bypass",
+				Why: "permissions.defaultMode = bypassPermissions: every tool call runs without confirmation"})
 		}
 		for _, a := range strList(perms["allow"]) {
 			if a == "Bash" || a == "Bash(*)" || a == "Bash(*:*)" {
 				c.add(Finding{Rule: "agent.approval-bypass", Severity: SevWarn, Path: path, Message: fmt.Sprintf("permissions.allow contains %q: arbitrary shell commands run without confirmation", a)})
-				surface++
+				surfaces = append(surfaces, ExecSurface{Path: path, Kind: "approval-bypass",
+					Why: fmt.Sprintf("permissions.allow contains %q: arbitrary shell commands run without confirmation", a)})
 			}
 		}
 	}
@@ -418,12 +426,14 @@ func auditAgentSettings(r *resolved, c *collector, path string, doc map[string]a
 		c.add(Finding{Rule: "mcp.auto-enable-project", Severity: SevWarn, Path: path,
 			Message: "enableAllProjectMcpServers = true: any repository's .mcp.json is started without asking (a cloned or downloaded repo can run commands)",
 			Fix:     "remove it and approve project MCP servers individually"})
-		surface++
+		surfaces = append(surfaces, ExecSurface{Path: path, Kind: "approval-bypass",
+			Why: "enableAllProjectMcpServers = true: project MCP servers start without asking"})
 	}
 	// VS Code / Cursor settings.json
 	if v, ok := doc["chat.tools.autoApprove"].(bool); ok && v {
 		c.add(Finding{Rule: "agent.approval-bypass", Severity: SevWarn, Path: path, Message: "chat.tools.autoApprove = true: agent tool calls run without confirmation"})
-		surface++
+		surfaces = append(surfaces, ExecSurface{Path: path, Kind: "approval-bypass",
+			Why: "chat.tools.autoApprove = true: agent tool calls run without confirmation"})
 	}
 	// Codex config.toml
 	if base == "config.toml" {
@@ -437,7 +447,8 @@ func auditAgentSettings(r *resolved, c *collector, path string, doc map[string]a
 			c.add(Finding{Rule: "agent.approval-bypass", Severity: sev, Path: path,
 				Message: fmt.Sprintf("codex approval_policy=%q sandbox_mode=%q: commands run without approval and/or without the sandbox", ap, sm),
 				Fix:     "use approval_policy = \"on-request\" and sandbox_mode = \"workspace-write\" on the host"})
-			surface++
+			surfaces = append(surfaces, ExecSurface{Path: path, Kind: "approval-bypass",
+				Why: fmt.Sprintf("codex approval_policy=%q sandbox_mode=%q", ap, sm)})
 		}
 		if projects, ok := doc["projects"].(map[string]any); ok {
 			for dir, v := range projects {
@@ -452,7 +463,7 @@ func auditAgentSettings(r *resolved, c *collector, path string, doc map[string]a
 			}
 		}
 	}
-	return surface
+	return surfaces
 }
 
 // stripJSONC removes // and /* */ comments and trailing commas (VS Code

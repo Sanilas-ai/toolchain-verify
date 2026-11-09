@@ -30,7 +30,7 @@ const usage = `toolchain-verify — verify a development toolchain against a man
 Usage:
   toolchain-verify check [-m toolchain.toml] [--root DIR] [--json] [-v] [--timeout 10s]
   toolchain-verify agent [-m toolchain.toml] [--trusted DIR]... [--advisories FILE]...
-                         [--strict] [--json] [-v] [-q] [--list-advisories]
+                         [--strict] [--json|--sarif] [-v] [-q] [--list-advisories]
                          [--pre-session] [--allow-untrusted-cwd]
                          [--quarantine [--quarantine-dir DIR]] [--no-host-inventory]
   toolchain-verify exec-lint [-m toolchain.toml] [--fail] [--strict] [--wrapper NAME]...
@@ -285,6 +285,7 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 	noBuiltin := fs.Bool("no-builtin-advisories", false, "do not load the embedded advisory database")
 	strict := fs.Bool("strict", false, "warnings fail the run")
 	asJSON := fs.Bool("json", false, "print a JSON report")
+	asSARIF := fs.Bool("sarif", false, "print SARIF 2.1.0 (includes policy.exec-surface locations)")
 	verbose := fs.Bool("v", false, "verbose: also print info findings and fixes")
 	list := fs.Bool("list-advisories", false, "print the advisory database and exit")
 	home := fs.String("home", "", "home directory to audit (default: current user's)")
@@ -367,12 +368,18 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if !(*quiet && rep.OK && err == nil) {
-		if *asJSON {
+		switch {
+		case *asJSON:
 			enc := json.NewEncoder(stdout)
 			enc.SetIndent("", "  ")
 			enc.SetEscapeHTML(false)
 			_ = enc.Encode(rep)
-		} else {
+		case *asSARIF:
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			enc.SetEscapeHTML(false)
+			_ = enc.Encode(rep.SARIF(buildVersion))
+		default:
 			printAgent(stdout, rep, *verbose)
 		}
 	}
@@ -400,6 +407,13 @@ func printAgent(w io.Writer, rep *agent.Report, verbose bool) {
 		fmt.Fprintln(w, "  note: no trusted roots configured (agent.trusted_roots / --trusted)")
 	} else if verbose {
 		fmt.Fprintf(w, "  trusted roots: %s\n", strings.Join(rep.TrustedRoots, ", "))
+	}
+	if len(rep.ExecSurfaces) > 0 {
+		fmt.Fprintf(w, "  exec-capable surfaces (%d):\n", len(rep.ExecSurfaces))
+		for _, s := range rep.ExecSurfaces {
+			fmt.Fprintf(w, "    %-16s %s\n", s.Kind, orDash(s.Path))
+			fmt.Fprintf(w, "        %s\n", s.Why)
+		}
 	}
 	for _, f := range rep.Findings {
 		if f.Severity == agent.SevInfo && !verbose {

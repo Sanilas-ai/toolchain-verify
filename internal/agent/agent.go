@@ -343,20 +343,50 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	}
 	installs := append(inventory(r, db, c, rep), hostInstalls...)
 	rep.Installs = installs
-	execSurface := checkStacks(r, db, c, installs)
-	execSurface += checkMCP(r, c, mcpFiles)
+	surfaces := append(checkStacks(r, db, c, installs), checkMCP(r, c, mcpFiles)...)
+	rep.ExecSurfaces = surfaces
+	for _, s := range surfaces {
+		c.add(Finding{Rule: "policy.exec-surface", Severity: SevInfo, Path: s.Path,
+			Message: fmt.Sprintf("%s: %s", s.Kind, s.Why)})
+	}
 	checkCredentials(r, c)
 	if r.supplyChain {
 		checkSupplyChain(r, c)
 	}
-	if execSurface > 0 && (r.requireCont == nil || !*r.requireCont) {
-		c.add(Finding{Rule: "policy.require-container", Severity: SevWarn,
-			Message: fmt.Sprintf("%d exec-capable agent tool surface(s) found (agent stacks, stdio MCP servers, approval bypass) but the manifest does not set require_container = true", execSurface),
-			Fix:     "set require_container = true in the manifest and run agents/tools inside a disposable, non-root container with an empty env and egress allow-list"})
+	if len(surfaces) > 0 && (r.requireCont == nil || !*r.requireCont) {
+		list := formatSurfaceList(surfaces)
+		if r.inContainer {
+			// Already inside a container: do not WARN. Keep an INFO note so
+			// operators still see that surfaces exist and can pin the
+			// expectation with require_container = true.
+			c.add(Finding{Rule: "policy.require-container", Severity: SevInfo,
+				Message: fmt.Sprintf("%d exec-capable agent tool surface(s) found; already running in a container so require_container WARN is not raised. Surfaces:\n%s", len(surfaces), list),
+				Fix:     "optionally set require_container = true in the manifest so check/pin also enforce the container context"})
+		} else {
+			c.add(Finding{Rule: "policy.require-container", Severity: SevWarn,
+				Message: fmt.Sprintf("%d exec-capable agent tool surface(s) found (agent stacks, stdio MCP servers, approval bypass) but the manifest does not set require_container = true. Surfaces:\n%s", len(surfaces), list),
+				Fix:     "set require_container = true in the manifest and run agents/tools inside a disposable, non-root container with an empty env and egress allow-list"})
+		}
 	}
 
 	r.finish(c, rep, strict)
 	return rep, nil
+}
+
+// formatSurfaceList renders each surface as "  - kind path: why" for text findings.
+func formatSurfaceList(surfaces []ExecSurface) string {
+	var b strings.Builder
+	for i, s := range surfaces {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		path := s.Path
+		if path == "" {
+			path = "-"
+		}
+		fmt.Fprintf(&b, "  - %s %s: %s", s.Kind, path, s.Why)
+	}
+	return b.String()
 }
 
 // finish applies quarantine and computes the verdict.

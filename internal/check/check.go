@@ -271,19 +271,51 @@ func probe(bin string, args []string, timeout time.Duration) (string, error) {
 }
 
 // DetectContainer reports whether the process appears to run in a container.
+//
+// Heuristic (env alone is never enough — $container is trivially spoofable and
+// must not silence policy.require-container on the host):
+//  1. Marker files: /.dockerenv (Docker) or /run/.containerenv (Podman), or
+//     /run/systemd/container (systemd-nspawn).
+//  2. Else /proc/1/cgroup names docker|containerd|kubepods|libpod|lxc|podman.
+//  3. Else /proc/self/mountinfo shows overlay/overlay2 mounted on "/" (common
+//     on cgroup v2 where the cgroup file is just "0::/").
+//
+// Detection is still a heuristic, not a security boundary: a privileged process
+// can plant marker files. Downgrading policy.require-container to INFO only
+// happens when this heuristic says we are already in a container; spoofing
+// $container=docker on the host no longer skips the WARN.
 func DetectContainer() bool {
-	for _, f := range []string{"/.dockerenv", "/run/.containerenv"} {
-		if _, err := os.Stat(f); err == nil {
+	return detectContainer(os.Stat, os.ReadFile)
+}
+
+func detectContainer(stat func(string) (os.FileInfo, error), readFile func(string) ([]byte, error)) bool {
+	for _, f := range []string{"/.dockerenv", "/run/.containerenv", "/run/systemd/container"} {
+		if _, err := stat(f); err == nil {
 			return true
 		}
 	}
-	if os.Getenv("container") != "" {
-		return true
-	}
-	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+	if b, err := readFile("/proc/1/cgroup"); err == nil {
 		s := string(b)
-		for _, k := range []string{"docker", "containerd", "kubepods", "libpod", "lxc"} {
+		for _, k := range []string{"docker", "containerd", "kubepods", "libpod", "lxc", "podman"} {
 			if strings.Contains(s, k) {
+				return true
+			}
+		}
+	}
+	if b, err := readFile("/proc/self/mountinfo"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			// mountinfo: ID parent major:minor root mountpoint opts [opt]* - fstype ...
+			dash := strings.Index(line, " - ")
+			if dash < 0 {
+				continue
+			}
+			left := strings.Fields(line[:dash])
+			right := strings.Fields(line[dash+3:])
+			if len(left) < 5 || len(right) < 1 {
+				continue
+			}
+			mountPoint, fsType := left[4], right[0]
+			if mountPoint == "/" && (fsType == "overlay" || fsType == "overlay2") {
 				return true
 			}
 		}
