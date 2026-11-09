@@ -1,0 +1,15 @@
+<tool_call>
+<function=search>
+<parameter=query>
+golang toolchain
+</parameter>
+</function>
+</tool_call>
+And then I will also call another tool...
+<tool_call>
+<function=search>
+<parameter=query>
+junk
+</parameter>
+</function>
+</tool_call>

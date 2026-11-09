@@ -1,0 +1,1 @@
+<|tool_call_start|>[get_weather(city="Tokyo"), search(query="x")]<|tool_call_end|>and more junk

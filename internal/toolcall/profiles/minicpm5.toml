@@ -1,0 +1,18 @@
+# Profile for MiniCPM5-1B-Agentic-Tooluse-v3.
+# Source (fetched 2026-11-09, data only):
+#   https://huggingface.co/ewin-reg/MiniCPM5-1B-Agentic-Tooluse-QLoRA-v3/raw/main/chat_template.jinja
+#   https://huggingface.co/ewin-reg/MiniCPM5-1B-Agentic-Tooluse-v3-Merged-FP16 (model card;
+#     stopped_cleanly_rate 0.0000, no_repetition_rate 0.3400 — claimed, not verified here)
+# Always apply_chat_template(..., enable_thinking=False) for tool calls.
+
+id = "minicpm5"
+description = "MiniCPM5-1B-Agentic-Tooluse-v3 XML <function name=...><param...>"
+format = "minicpm5_xml"
+call_start = "<function "
+call_end = "</function>"
+stop_sequences = ["</function>", "<|im_end|>"]
+eos_token = "<|im_end|>"
+sources = [
+  "https://huggingface.co/ewin-reg/MiniCPM5-1B-Agentic-Tooluse-QLoRA-v3/raw/main/chat_template.jinja",
+  "https://huggingface.co/ewin-reg/MiniCPM5-1B-Agentic-Tooluse-v3-Merged-FP16",
+]

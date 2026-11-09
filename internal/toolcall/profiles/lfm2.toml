@@ -1,0 +1,18 @@
+# Profile for LiquidAI LFM2 / LFM2.5 (NOT LFM3).
+# Source (fetched 2026-11-09, data only):
+#   https://huggingface.co/LiquidAI/LFM2-1.2B/raw/main/chat_template.jinja
+#   https://huggingface.co/LiquidAI/LFM2-1.2B/raw/main/tokenizer_config.json
+#   https://docs.liquid.ai/lfm/key-concepts/tool-use (LFM2 and LFM2.5 section)
+
+id = "lfm2"
+description = "LiquidAI LFM2/LFM2.5 pythonic tool calls"
+format = "lfm2_pythonic"
+call_start = "<|tool_call_start|>"
+call_end = "<|tool_call_end|>"
+stop_sequences = ["<|tool_call_end|>", "<|im_end|>", "<|endoftext|>"]
+eos_token = "<|im_end|>"
+sources = [
+  "https://huggingface.co/LiquidAI/LFM2-1.2B/raw/main/chat_template.jinja",
+  "https://huggingface.co/LiquidAI/LFM2-1.2B/raw/main/tokenizer_config.json",
+  "https://docs.liquid.ai/lfm/key-concepts/tool-use",
+]

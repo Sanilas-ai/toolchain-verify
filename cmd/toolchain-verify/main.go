@@ -50,6 +50,7 @@ Usage:
                          [--max-file-size N] [--max-files N] [--max-depth N]
                          [--timeout D] [--include-deps] [--strict-coverage] [-v] [-q] DIR
   toolchain-verify mcp-tools [--pin FILE] [--write-pin FILE] [--json|--sarif] [--strict] TOOLS.json|-
+  toolchain-verify toolcall parse|bench|grounded|profiles|stops ...
   toolchain-verify pin   [-m toolchain.toml] [--root DIR] [--version exact|tilde|caret|min|keep]
                          [--no-sha256] [--path] [--tool NAME]... [--dry-run] [--ignore-container]
   toolchain-verify init  [-m toolchain.toml] [--force]
@@ -87,6 +88,9 @@ Usage:
          bidi, HTML comments/hidden elements, entity-encoded text), with
          versioned IOCs. Never runs git, installers, agents or MCP servers.
          Exit 4 = INCOMPLETE (something was not checked; never a PASS).
+  toolcall safe parser for small local tool-call models (LFM3, MiniCPM5,
+         Hermes, LFM2): first complete call wins, schema + allowlist + tty
+         gate for sensitive classes, grounded search-answer validator, bench.
   mcp-tools  offline lint of a saved MCP tools/list result: description
          and schema poisoning, hidden parameters, cross-tool instructions,
          homoglyph names, shadowing, markdown-image exfiltration, toxic
@@ -137,6 +141,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdScan(args[1:], stdout, stderr)
 	case "mcp-tools":
 		return cmdMCPTools(args[1:], stdin, stdout, stderr)
+	case "toolcall":
+		return cmdToolcall(args[1:], stdin, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0

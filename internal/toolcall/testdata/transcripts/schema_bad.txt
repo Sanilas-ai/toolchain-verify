@@ -1,0 +1,1 @@
+<function name="get_weather"><param name="city">Paris</param><param name="units">kelvin</param></function>

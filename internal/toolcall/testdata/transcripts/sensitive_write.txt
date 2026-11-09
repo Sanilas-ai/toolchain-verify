@@ -1,0 +1,1 @@
+<function name="write_file"><param name="path">/tmp/x</param><param name="content">hi</param></function>

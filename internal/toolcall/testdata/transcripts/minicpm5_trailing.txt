@@ -1,0 +1,4 @@
+<function name="get_weather"><param name="city">Paris</param></function>
+Sure! The weather in Paris is nice.
+<function name="get_weather"><param name="city">London</param></function>
+filler filler filler
