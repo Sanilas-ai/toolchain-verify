@@ -14,7 +14,7 @@ Non-zero exit stops the pipeline.
 | **Wrong binary on PATH** | `~/.local/bin/node` shadows the system node; a planted `git` in a writable dir early in PATH; `.` or an empty entry in `PATH` | Report the found *and* symlink-resolved path; optional `path` glob; optional `sha256`; relative/empty `PATH` entries are never searched |
 | **Tampered / replaced binary** | Same path, different contents after a compromised package or manual copy | `sha256` of the resolved file (record from a trusted environment with `pin`) |
 | **Version drift** | Image rebuilt with Go 1.27 while the project expects 1.22.x; node 18 vs 22 | `version` constraints (exact, wildcard, ranges, `~`, `^`, `||`) |
-| **Host vs sandbox mismatch** | Tests accidentally run on the host instead of the `oss-sandbox` container, using host tools and host credentials | `require_container = true` (or `false` for host-only manifests); detection via `/.dockerenv`, `/run/.containerenv`, `$container`, `/proc/1/cgroup` |
+| **Host vs sandbox mismatch** | Tests accidentally run on the host instead of the `oss-sandbox` container, using host tools and host credentials | `require_container = true` (or `false` for host-only manifests); detection via marker files (`/.dockerenv`, `/run/.containerenv`, `/run/systemd/container`), `/proc/1/cgroup`, or overlay on `/` in `/proc/self/mountinfo`. `$container` alone is ignored (trivially spoofable) |
 | **Silent misconfiguration** | Typo `sha265 = ...` disables the hash check | Unknown manifest keys are a hard error; invalid constraints, regexes and digests are rejected at load time |
 | **Hanging probe** | A tool waits on stdin or the network | Probes run with no stdin and a timeout (`--timeout`, default 10s) |
 
@@ -23,7 +23,13 @@ Non-zero exit stops the pipeline.
 - It **executes** each tool with its version arguments. Run it only with manifests you trust,
   and preferably inside the sandbox. A malicious binary can lie about its version; that is
   why `sha256` exists.
-- Container detection is heuristic, not a security boundary.
+- Container detection is heuristic, not a security boundary. Signals used, in order:
+  marker files (`/.dockerenv`, `/run/.containerenv`, `/run/systemd/container`), then
+  `/proc/1/cgroup` keywords (`docker`, `containerd`, `kubepods`, `libpod`, `lxc`, `podman`),
+  then overlay/overlay2 mounted on `/` in `/proc/self/mountinfo`. The `$container`
+  environment variable is **not** accepted on its own, so `export container=docker` on
+  the host cannot silence `policy.require-container`. A privileged process can still
+  plant marker files; treat detection as a convenience check, not isolation.
 - A hash pins one exact build; it is per-platform and must be updated on upgrade.
 - Shared libraries, interpreters' site-packages, and plugins are not verified (future work:
   `ldd`/module lists, SBOM output).
@@ -49,7 +55,7 @@ It never executes binaries, never opens credential files and never prints file c
 | Tampering with instruction or MCP files by other local users or processes | `instr.writable`, `mcp.writable` (world-writable = fail, foreign owner = warn) |
 | Prompt injection → RCE in agent stacks (Flowise, Langflow/lfx, PraisonAI, Vibe-Trading, LangAlpha), from the declarative advisory DB | `stack.vulnerable`, `stack.present`, `stack.unknown-version`, `stack.image-unpinned` |
 | Agent stacks installed globally or run as services/containers (pip user site, pipx, conda, `npm -g`, snap, systemd units, Docker/Podman images and containers, including `ALLOW_BUILTIN_DEP` in their env) | `stack.*` with host sources, `stack.service`, `inventory.engine-unavailable` (info); `ban_unfixed` turns unfixed advisories into fail |
-| Exec-capable stacks running directly on the host | `stack.exec-on-host` (fail when `require_container_for_exec`), `policy.require-container` |
+| Exec-capable stacks running directly on the host | `stack.exec-on-host` (fail when `require_container_for_exec`), `policy.require-container` (WARN on host listing each surface; INFO when already in a container), `policy.exec-surface` (INFO per surface: path, kind, why) |
 | MCP tool poisoning / rug pull via unpinned `npx`/`uvx`/`pnpm dlx`/`pipx run` packages | `mcp.unpinned` |
 | Remote MCP servers over cleartext HTTP, or any remote server | `mcp.remote-cleartext` (fail), `mcp.remote` (info) |
 | Approval bypass: MCP `autoApprove`/`alwaysAllow`, Claude `bypassPermissions`, Codex `approval_policy = "never"` + `danger-full-access`, VS Code `chat.tools.autoApprove`, `enableAllProjectMcpServers`, Codex trust for an untrusted dir | `mcp.auto-approve`, `agent.approval-bypass`, `mcp.auto-enable-project`, `agent.trusted-untrusted-dir` |

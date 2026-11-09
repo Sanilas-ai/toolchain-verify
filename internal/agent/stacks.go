@@ -2,13 +2,14 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
 // checkStacks matches installs against the advisory database. It returns
-// the number of distinct exec-capable stacks seen.
-func checkStacks(r *resolved, db *DB, c *collector, installs []Install) int {
-	execStacks := map[string]bool{}
+// one ExecSurface per distinct exec-capable stack name (representative path).
+func checkStacks(r *resolved, db *DB, c *collector, installs []Install) []ExecSurface {
+	execStacks := map[string]ExecSurface{}
 	for i := range installs {
 		in := &installs[i]
 		if in.Stack == "" {
@@ -16,7 +17,13 @@ func checkStacks(r *resolved, db *DB, c *collector, installs []Install) int {
 		}
 		s := &db.Stacks[db.stackIndex(in.Stack)]
 		if s.CanExec {
-			execStacks[s.Name] = true
+			if _, ok := execStacks[s.Name]; !ok {
+				execStacks[s.Name] = ExecSurface{
+					Path: in.Path,
+					Kind: "agent-stack",
+					Why:  fmt.Sprintf("exec-capable agent stack %s (%s %s via %s) can run tools/code from model output", s.Name, in.Package, in.Version, in.Source),
+				}
+			}
 		}
 		v, err := parsePkgVersion(in.Version)
 		if err != nil {
@@ -80,5 +87,15 @@ func checkStacks(r *resolved, db *DB, c *collector, installs []Install) int {
 				Fix:     "run it only inside a disposable non-root container with an empty env and egress allow-list, or set agent.require_container_for_exec = false to accept the risk"})
 		}
 	}
-	return len(execStacks)
+	out := make([]ExecSurface, 0, len(execStacks))
+	for _, s := range execStacks {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Kind < out[j].Kind
+	})
+	return out
 }
