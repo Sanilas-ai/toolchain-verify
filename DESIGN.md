@@ -328,7 +328,7 @@ workflows, package hooks and skill scripts. Each file is treated as untrusted da
 - Signed manifests and IOC DB signatures; registry provenance and container signature checks (golf-style).
 - More model formats: ONNX, Keras H5, TF SavedModel lambda layers (modelscan/fickling ideas).
 - Import a red-team corpus (agentdojo/spikee/PurpleLlama prompts) as offline regression fixtures for the detectors.
-- Pin our own CI actions to full SHAs. Currently `gha.unpinned-action` warns on our own `ci.yml`. A push of workflow changes needs a token with the `workflow` scope, so this is deferred.
+- Done: our own CI actions are pinned to full commit SHAs (with version comments).
 
 ## Layout
 
