@@ -32,12 +32,25 @@ func (s *scanner) scanHiddenRunes(rel string, control bool, b []byte) {
 		ev := escapeEvidence(snippetAround(b, r.offset, 120), evidenceRunes)
 		switch r.kind {
 		case "tags":
-			f := Finding{Rule: "unicode.tag-smuggling", Severity: SevFail, Path: rel, Line: r.line, Offset: r.offset, Evidence: ev,
+			// Tags outside emoji flags are suspicious, but WPT/URL fixtures and
+			// similar tests deliberately put Tag code points in hostnames.
+			// Fail only when the file is agent-control text or the decoded
+			// payload carries instruction signals; otherwise warn, and demote
+			// test/fixture trees without signals to info.
+			sig := signals(canonical(r.decoded))
+			sev := SevWarn
+			switch {
+			case len(sig) > 0 || control:
+				sev = SevFail
+			case isTestishPath(rel):
+				sev = SevInfo
+			}
+			f := Finding{Rule: "unicode.tag-smuggling", Severity: sev, Path: rel, Line: r.line, Offset: r.offset, Evidence: ev,
 				Decoded: escapeEvidence(r.decoded, evidenceRunes),
 				Message: fmt.Sprintf("%d invisible Unicode Tag characters (U+E0000–E007F) outside an emoji flag sequence; models read them as text, reviewers see nothing", r.count),
 				Fix:     "remove the tag characters; review who added them (git log -p)",
 				Refs:    []string{"https://aws.amazon.com/blogs/security/defending-llm-applications-against-unicode-character-smuggling/"}}
-			if sig := signals(canonical(r.decoded)); len(sig) > 0 {
+			if len(sig) > 0 {
 				f.Signals = sigList(sig)
 				f.Message += "; decoded text carries instruction signals"
 			}
