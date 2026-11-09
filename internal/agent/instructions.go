@@ -116,7 +116,7 @@ func checkInstructions(r *resolved, c *collector, rep *Report) []foundConfig {
 		}
 	}
 
-	for _, root := range r.trusted {
+	for _, root := range r.instructionWalkRoots() {
 		if _, err := os.Lstat(root); err != nil {
 			c.add(Finding{Rule: "policy.trusted-root-missing", Severity: SevInfo, Path: root, Message: "trusted root does not exist"})
 			continue
@@ -207,4 +207,24 @@ func checkWritable(r *resolved, c *collector, rule, p string) {
 				Fix: "chmod o-w " + dir})
 		}
 	}
+}
+
+// instructionWalkRoots returns the directories whose instruction/MCP files
+// are scanned under the trust boundary. With scope "repo" (default) this is
+// the current git toplevel (or cwd) when it lies inside a trusted root —
+// so `--trusted /work` from /work/osm-website does not walk every other
+// checkout under /work. With scope "trusted-roots" every trusted root is
+// walked in full (previous behaviour).
+func (r *resolved) instructionWalkRoots() []string {
+	if r.scope == "trusted-roots" {
+		return r.trusted
+	}
+	repo := gitToplevel(r.cwd)
+	if repo == "" {
+		repo = filepath.Clean(r.cwd)
+	}
+	if r.isTrusted(repo) {
+		return []string{repo}
+	}
+	return nil
 }

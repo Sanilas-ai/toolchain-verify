@@ -49,10 +49,10 @@ It never executes binaries, never opens credential files and never prints file c
 | Threat class (documented) | Rules |
 |---|---|
 | Planted instruction files: an `AGENTS.md` / `CLAUDE.md` / `.cursorrules` / Copilot instructions file dropped into Downloads, Desktop or `/tmp` (including browser-renamed `AGENTS (1).md`) hijacks an agent started there | `instr.untrusted` (fail; content labels such as `pipe-to-shell`, `credential-path`, `exfil-endpoint`, `approval-bypass`, `hidden-unicode`), `cwd.untrusted`, `cwd.ancestor-instructions`, `instr.home` |
-| Agent started from an untrusted cwd, or from an unknown checkout carrying its own instruction files | `cwd.untrusted` (`--pre-session` exit 3, `--allow-untrusted-cwd` → warn), `cwd.instructions` (fail with trusted roots, else warn) |
+| Agent started from an untrusted cwd, or from an unknown checkout carrying its own instruction files | `cwd.untrusted` (`--pre-session` exit 3, `--allow-untrusted-cwd` → warn), `cwd.instructions` (fail with trusted roots, else warn), `policy.no-trusted-roots` (`--pre-session` with no trusted roots → warn + exit 4 INCOMPLETE; never a silent PASS) |
 | Planted files remaining on disk after detection | `--quarantine`: move to a quarantine dir as `*.quarantined`, finding → warn (only for `instr.untrusted`, `mcp.untrusted-location`) |
 | Prompt injection inside trusted repos (instruction override, hidden Unicode bidi/tag characters, encoded blobs) | `instr.suspicious` (warn) |
-| Tampering with instruction or MCP files by other local users or processes | `instr.writable`, `mcp.writable` (world-writable = fail, foreign owner = warn) |
+| Tampering with instruction or MCP files by other local users or processes | `instr.writable`, `mcp.writable` (world-writable = fail, foreign owner = warn; editor `settings.json` only when it contains MCP keys) |
 | Prompt injection → RCE in agent stacks (Flowise, Langflow/lfx, PraisonAI, Vibe-Trading, LangAlpha), from the declarative advisory DB | `stack.vulnerable`, `stack.present`, `stack.unknown-version`, `stack.image-unpinned` |
 | Agent stacks installed globally or run as services/containers (pip user site, pipx, conda, `npm -g`, snap, systemd units, Docker/Podman images and containers, including `ALLOW_BUILTIN_DEP` in their env) | `stack.*` with host sources, `stack.service`, `inventory.engine-unavailable` (info); `ban_unfixed` turns unfixed advisories into fail |
 | Exec-capable stacks running directly on the host | `stack.exec-on-host` (fail when `require_container_for_exec`), `policy.require-container` (WARN on host listing each surface; INFO when already in a container), `policy.exec-surface` (INFO per surface: path, kind, why) |
@@ -83,7 +83,11 @@ It never executes binaries, never opens credential files and never prints file c
   is skipped. From unit and container environments only names listed in `escalate_env` are
   kept; values and other variables are discarded. No binary found by inventory is executed.
 - Exit codes: `0` pass, `1` findings failed, `2` usage/policy error or refused target,
-  `3` `--pre-session` refused an untrusted cwd. `-q` prints nothing on pass (cron).
+  `3` `--pre-session` refused an untrusted cwd, `4` incomplete (`--pre-session` with no
+  trusted roots, or a scan coverage gap). `-q` prints nothing on pass (cron).
+- Instruction walks under trusted roots default to the current git repository (`--scope=repo`)
+  so a wide `--trusted /work` does not scan every sibling checkout; `--scope=trusted-roots`
+  restores the full walk.
 - Reads at most 512 KiB per file, bounded depth and entry counts (`scan.truncated`).
 - Advisories live in an embedded, strictly validated TOML (`internal/agent/advisories.toml`):
   every entry needs a primary-source reference; conditional or unfixed issues are `warn`

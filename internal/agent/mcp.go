@@ -83,7 +83,10 @@ func checkMCP(r *resolved, c *collector, found []foundConfig) []ExecSurface {
 		if err != nil || !st.Mode().IsRegular() {
 			continue
 		}
-		checkWritable(r, c, "mcp.writable", p)
+		editorSettings := isEditorSettingsPath(p)
+		if !editorSettings {
+			checkWritable(r, c, "mcp.writable", p)
+		}
 		if fc.untrusted != "" {
 			c.add(Finding{Rule: "mcp.untrusted-location", Severity: r.untrustedSev, Path: p,
 				Message: fmt.Sprintf("MCP/agent config in untrusted location %s; an agent started there would load its servers and permissions", fc.untrusted),
@@ -103,12 +106,57 @@ func checkMCP(r *resolved, c *collector, found []foundConfig) []ExecSurface {
 			c.add(Finding{Rule: "mcp.parse", Severity: SevWarn, Path: p, Message: "cannot parse JSON: " + err.Error()})
 			continue
 		}
+		// Editor settings.json often holds only eslint/format options. Flag
+		// mcp.writable only when the file actually configures MCP.
+		if editorSettings && hasMCPKeys(doc) {
+			checkWritable(r, c, "mcp.writable", p)
+		}
 		surfaces = append(surfaces, auditAgentSettings(r, c, p, doc)...)
 		for _, s := range extractServers(doc) {
 			surfaces = append(surfaces, auditServer(r, c, p, s)...)
 		}
 	}
 	return surfaces
+}
+
+// isEditorSettingsPath reports VS Code / Cursor / Zed settings.json files
+// (user-level or project .vscode/settings.json). These frequently contain
+// only editor preferences and must not be labelled mcp.writable unless they
+// actually configure MCP.
+func isEditorSettingsPath(p string) bool {
+	slash := filepath.ToSlash(p)
+	if strings.HasSuffix(slash, "/.vscode/settings.json") {
+		return true
+	}
+	for _, suf := range []string{
+		"/.config/Code/User/settings.json",
+		"/.config/Cursor/User/settings.json",
+		"/.config/zed/settings.json",
+	} {
+		if strings.HasSuffix(slash, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasMCPKeys reports whether a parsed settings/config document configures
+// MCP servers or VS Code/Cursor chat.mcp.* / mcp.* keys.
+func hasMCPKeys(doc map[string]any) bool {
+	if doc == nil {
+		return false
+	}
+	for _, k := range []string{"mcpServers", "servers", "mcp_servers", "context_servers", "mcp"} {
+		if _, ok := doc[k]; ok {
+			return true
+		}
+	}
+	for k := range doc {
+		if strings.HasPrefix(k, "mcp.") || strings.HasPrefix(k, "chat.mcp.") {
+			return true
+		}
+	}
+	return false
 }
 
 // extractServers finds MCP server maps under the keys used by Cursor,

@@ -101,14 +101,18 @@ and `.pth` hooks. It executes nothing and never prints file contents.
 ```bash
 toolchain-verify agent                         # defaults (+ [agent] from ./toolchain.toml if cwd is trusted)
 toolchain-verify agent --trusted ~/src -v      # trust instruction files only under ~/src
+toolchain-verify agent --trusted ~/src --scope=trusted-roots -v  # walk every checkout under ~/src
 toolchain-verify agent -m examples/agent-protect.toml --json
 toolchain-verify agent --list-advisories       # show the built-in advisory DB
-toolchain-verify agent --pre-session           # cheap cwd-only gate before starting an agent
+toolchain-verify agent --pre-session --trusted ~/src  # cheap cwd-only gate (needs trusted roots)
 toolchain-verify agent --quarantine            # move planted instruction/MCP files out of Downloads,/tmp
 ```
 
 Before an agent session, gate the working directory (exit `3` if cwd is Downloads, Desktop,
-`/tmp`, ... or contains a planted instruction file there):
+`/tmp`, ...; exit `4` / INCOMPLETE if no trusted roots are configured — that used to
+pass silently). Pass `--trusted` (or `agent.trusted_roots`) so the gate is complete.
+`--scope=repo` (default) limits instruction walks under a wide `--trusted` root to the
+current git repository; `--scope=trusted-roots` walks the whole root:
 
 ```bash
 # ~/.bashrc
@@ -382,6 +386,7 @@ version = ">=1.22, <2"            # constraint (see below)
 version_args = ["version"]        # default ["--version"]
 version_regex = 'go(?P<version>\d+\.\d+(\.\d+)?)'   # optional; default: first X.Y[.Z] in output
 path = "/opt/go/bin/go"           # optional glob; `*`, `?`, `**`; relative = to manifest dir or --root
+                                      # (mismatch errors restate that and show the resolved pattern)
 sha256 = "5f5eb6d0…"              # optional digest of the binary (symlinks resolved)
 optional = false                  # true: missing tool is SKIP, not FAIL
 ```

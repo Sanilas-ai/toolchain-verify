@@ -63,6 +63,10 @@ type Report struct {
 	Ignored      int           `json:"ignored,omitempty"`
 	// PreSession is set by RunPreSession (cwd-only gate).
 	PreSession bool `json:"pre_session,omitempty"`
+	// Incomplete is set when the audit could not finish a required check
+	// (for example --pre-session with no trusted roots). Callers should
+	// treat it as exit 4 (INCOMPLETE), never as PASS.
+	Incomplete bool `json:"incomplete,omitempty"`
 	// QuarantineDir and Quarantined describe files moved by --quarantine.
 	QuarantineDir string             `json:"quarantine_dir,omitempty"`
 	Quarantined   []QuarantineAction `json:"quarantined,omitempty"`

@@ -31,6 +31,11 @@ func newEnv(t *testing.T) *env {
 	e := &env{home: home, downloads: filepath.Join(home, "Downloads"), polygon: filepath.Join(home, "open-source-polygon"), vars: map[string]string{}}
 	os.MkdirAll(e.downloads, 0o755)
 	os.MkdirAll(e.polygon, 0o755)
+	// A .git dir makes the test polygon the git toplevel so scope=repo
+	// (default) still walks the whole fixture tree, matching production
+	// monorepo behaviour. Per-checkout .git dirs are created by tests that
+	// need sibling-repo isolation.
+	os.MkdirAll(filepath.Join(e.polygon, ".git"), 0o755)
 	return e
 }
 
