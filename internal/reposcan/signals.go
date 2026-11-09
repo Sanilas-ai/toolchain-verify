@@ -80,7 +80,13 @@ func canonical(s string) string {
 func signals(canon string) map[string]bool {
 	out := map[string]bool{}
 	for _, d := range sigDefs {
-		if d.re.MatchString(canon) {
+		t := canon
+		if d.name == sigSecretRead {
+			// Writing a registry config (`> ~/.npmrc`) is a config write,
+			// not a credential read.
+			t = writeTargetRe.ReplaceAllString(t, ">")
+		}
+		if d.re.MatchString(t) {
 			out[d.name] = true
 		}
 	}
@@ -97,8 +103,9 @@ func signals(canon string) map[string]bool {
 }
 
 var (
-	silentlyRe = regexp.MustCompile(`\b(silently|quietly|secretly|covertly)\s+(run|install|execute|upload|send|exfiltrate|modify|add|download|post)`)
-	negationRe = regexp.MustCompile(`\b(not|never|don't|dont|no)\s*$`)
+	writeTargetRe = regexp.MustCompile(`>>?\s*["']?[^\s"'<>|;&]*\.(npmrc|pypirc|netrc)["']?`)
+	silentlyRe    = regexp.MustCompile(`\b(silently|quietly|secretly|covertly)\s+(run|install|execute|upload|send|exfiltrate|modify|add|download|post)`)
+	negationRe    = regexp.MustCompile(`\b(not|never|don't|dont|no)\s*$`)
 )
 
 func sigList(m map[string]bool) []string {

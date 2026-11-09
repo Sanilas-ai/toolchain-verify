@@ -278,7 +278,7 @@ workflows, package hooks and skill scripts. Each file is treated as untrusted da
 |---|---|
 | Hidden instructions (tag smuggling, bidi, zero-width, variation selectors) | `unicode.*` (emoji ZWJ and RTL/Indic joiners allowed) |
 | Instructions hidden in markup (HTML/markdown comments, hidden styles, `<details>`, LaTeX white/phantom, entity runs) | `hidden.*`, `encoding.html-entities` |
-| Prompt injection in instruction files | `instr.*`: secret-exfil, decode-exec, markdown-exfil, override-action, install-first, config-rewrite, endpoint-redirect, approval-bypass, pipe-to-shell, override, exfil-endpoint. These are correlated signals per paragraph, not single keywords |
+| Prompt injection in instruction files | `injection.*`: secret-exfil, decode-exec, markdown-exfil, override-action, install-first, config-rewrite, endpoint-redirect, approval-bypass, pipe-to-shell, override, exfil-endpoint. These are correlated signals per paragraph, not single keywords |
 | MCP configs: unpinned `npx`/`uvx` runners, typosquats, privileged containers, docker.sock, cleartext remotes | `mcp.*` |
 | Agent settings: auto-approve / YOLO, endpoint override, hooks, broad permissions | `agent.*` |
 | Editor auto-run (`folderOpen` tasks, disabled workspace trust) | `editor.*` |
