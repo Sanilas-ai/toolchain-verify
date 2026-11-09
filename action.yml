@@ -78,7 +78,7 @@ runs:
 
     - name: Upload SARIF
       if: >-
-        always() &&
+        success() &&
         inputs.upload-sarif == 'true' &&
         inputs.format == 'sarif' &&
         steps.run.outputs.report-path != ''

@@ -70,5 +70,6 @@ if [ -z "$BIN_PATH" ]; then
   exit 2
 fi
 chmod +x "$BIN_PATH"
+BIN_PATH="$(cd "$(dirname "$BIN_PATH")" && pwd)/$(basename "$BIN_PATH")"
 echo "Installed $($BIN_PATH version 2>/dev/null || true) at $BIN_PATH"
 echo "binary=$BIN_PATH" >> "$GITHUB_OUTPUT"
