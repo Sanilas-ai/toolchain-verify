@@ -1,5 +1,7 @@
 # toolchain-verify
 
+[![CI](https://github.com/Sanilas-ai/toolchain-verify/actions/workflows/ci.yml/badge.svg)](https://github.com/Sanilas-ai/toolchain-verify/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/Sanilas-ai/toolchain-verify)](https://github.com/Sanilas-ai/toolchain-verify/releases/latest) [![License](https://img.shields.io/github/license/Sanilas-ai/toolchain-verify)](LICENSE)
+
 Verify a development toolchain against a declarative manifest — for reproducible
 and safer open-source work (CI, Docker sandboxes, fresh laptops).
 
@@ -16,11 +18,44 @@ pattern and optional SHA-256 of the binary, and exits `0` (all good) or `1`
 
 ### Install / build
 
+**Release binaries (recommended):**
+
 ```bash
-go install github.com/Sanilas-ai/toolchain-verify/cmd/toolchain-verify@latest
-# or from a checkout
-go build -o bin/toolchain-verify ./cmd/toolchain-verify
+TAG=v0.1.0
+VER=${TAG#v}
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # linux | darwin
+ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64;; aarch64|arm64) ARCH=arm64;; esac
+BASE=https://github.com/Sanilas-ai/toolchain-verify/releases/download/$TAG
+curl -fsSL -O "$BASE/SHA256SUMS"
+curl -fsSL -O "$BASE/toolchain-verify_${VER}_${OS}_${ARCH}.tar.gz"
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf toolchain-verify_${VER}_${OS}_${ARCH}.tar.gz
+sudo install -m 755 toolchain-verify /usr/local/bin/
+toolchain-verify version
 ```
+
+**GitHub Action (one line in CI):**
+
+```yaml
+- uses: Sanilas-ai/toolchain-verify@v0.1.0
+  with:
+    command: scan
+    path: .
+    format: sarif
+```
+
+Full example: [examples/ci/github-action-scan.yml](examples/ci/github-action-scan.yml).
+The action downloads the release binary for the runner OS/arch, verifies `SHA256SUMS`,
+runs the command, and can upload SARIF to code scanning (`security-events: write`).
+
+**From source:**
+
+```bash
+go install github.com/Sanilas-ai/toolchain-verify/cmd/toolchain-verify@v0.1.0
+# or from a checkout
+go build -ldflags="-X main.buildVersion=0.1.0" -o bin/toolchain-verify ./cmd/toolchain-verify
+```
+
 
 Inside the Docker OSS sandbox (nothing is installed on the host):
 
@@ -398,6 +433,9 @@ toolchain-verify pin --no-sha256 --dry-run    # show changes, write nothing
 
 ### Быстрый старт
 
+Бинарники: [Releases](https://github.com/Sanilas-ai/toolchain-verify/releases) (проверяйте `SHA256SUMS`).
+В CI одной строкой: `uses: Sanilas-ai/toolchain-verify@v0.1.0` (см. [examples/ci/github-action-scan.yml](examples/ci/github-action-scan.yml)).
+
 ```bash
 toolchain-verify init          # создать пример toolchain.toml
 toolchain-verify check         # проверить текущее окружение
@@ -574,4 +612,4 @@ toolchain-verify models -m examples/models-hp.toml -v --list
 
 ---
 
-License: [Apache-2.0](LICENSE) · Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+License: [Apache-2.0](LICENSE) · Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Changelog: [CHANGELOG.md](CHANGELOG.md)
