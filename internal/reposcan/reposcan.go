@@ -491,6 +491,9 @@ func (s *scanner) finish() {
 		return a.Line < b.Line
 	})
 	sort.Slice(s.rep.Inventory, func(i, j int) bool { return s.rep.Inventory[i].Path < s.rep.Inventory[j].Path })
+	if s.rep.Inventory == nil {
+		s.rep.Inventory = []ControlFile{}
+	}
 	if s.opt.StrictImages {
 		for _, k := range []string{"images", "archives", "binaries"} {
 			if n := s.rep.Coverage.NotChecked[k]; n > 0 {

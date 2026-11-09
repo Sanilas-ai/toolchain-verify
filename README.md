@@ -317,6 +317,25 @@ Configure it with a `[models]` table ([examples/models-hp.toml](examples/models-
 roots, trusted globs, an allowlist with SHA-256 pins, and fail vs. warn for pickles.
 Details: [DESIGN.md](DESIGN.md#model-artifact-scan-toolchain-verify-models).
 
+### Repository scan (`scan`) and MCP tool lint (`mcp-tools`)
+
+```sh
+toolchain-verify scan PATH                 # read-only; exit 0 PASS, 1 FAIL, 4 INCOMPLETE
+toolchain-verify scan --json PATH > scan.json
+toolchain-verify scan --sarif PATH > scan.sarif
+toolchain-verify scan --write-baseline base.json PATH; toolchain-verify scan --baseline base.json PATH
+toolchain-verify scan --list-iocs
+toolchain-verify mcp-tools tools.json --write-pin pin.json; toolchain-verify mcp-tools tools.json --pin pin.json
+```
+
+This finds the following:
+- hidden or invisible instructions in AGENTS.md, CLAUDE.md, .cursor/rules, SKILL.md and similar files
+- risky MCP and agent configs, editor auto-run tasks and unsafe GitHub workflows
+- package install hooks
+- known IOCs, such as the strutil-core / pystr-codec campaign
+
+The scan never executes anything from the repository. See DESIGN.md.
+
 ### Manifest
 
 ```toml
@@ -508,6 +527,18 @@ pytest/mvn/gradle — только в песочнице; git, gh и `docker ps/
 `sudo`, установка пакетов на хост, `npm -g`, `gh auth refresh/login`, `docker run
 --privileged` и монтирование `docker.sock`, `curl | sh` — запрещены. Это ограждение от
 ошибок и prompt injection, а не песочница.
+
+### Сканирование репозитория (`scan`)
+
+`toolchain-verify scan ПУТЬ` проверяет репозиторий только на чтение и ничего из него не запускает. Он ищет:
+- скрытые инструкции для агентов (невидимый Unicode, комментарии, скрытые стили);
+- опасные MCP- и агентские конфиги;
+- задачи редактора, которые запускаются автоматически;
+- небезопасные GitHub workflows;
+- хуки установки пакетов;
+- известные IOC.
+
+Если какой-то файл не удалось проверить, вердикт будет INCOMPLETE (код 4), а не PASS. Список инструментов MCP (`tools/list`) проверяется командой `toolchain-verify mcp-tools FILE`: она ищет tool poisoning и rug pull (с `--pin`).
 
 ### Файлы моделей
 
