@@ -100,7 +100,12 @@ if [ -z "$verdict" ] || [ "$verdict" = "UNKNOWN" ]; then
   esac
 fi
 
-echo "report-path=$REPORT" >> "$GITHUB_OUTPUT"
+if [ -n "$REPORT" ] && [ -s "$REPORT" ]; then
+  echo "report-path=$REPORT" >> "$GITHUB_OUTPUT"
+else
+  echo "report-path=" >> "$GITHUB_OUTPUT"
+  REPORT=""
+fi
 echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 echo "toolchain-verify exit=$rc verdict=$verdict report=${REPORT:-none}"
 

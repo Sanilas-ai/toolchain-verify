@@ -4,6 +4,14 @@ All notable changes to toolchain-verify are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [SemVer](https://semver.org/).
 
+## [0.1.1] — 2026-11-09
+
+### Fixed
+- GitHub Action: install the release binary at an absolute path so `working-directory` no longer breaks the run step.
+- GitHub Action: skip SARIF upload when the report file is missing or empty.
+
+[0.1.1]: https://github.com/Sanilas-ai/toolchain-verify/releases/tag/v0.1.1
+
 ## [0.1.0] — 2026-11-09
 
 First public release.
