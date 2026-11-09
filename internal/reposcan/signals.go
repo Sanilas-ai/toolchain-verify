@@ -134,7 +134,6 @@ func firstMatch(canon string, names ...string) int {
 	return best
 }
 
-
 // strongSecretRead is true when canon names a credential file, a known
 // token env var, gh auth token, printenv, or /proc/.../environ. It does
 // NOT fire on bare process.env / os.environ, which skill tools use for
