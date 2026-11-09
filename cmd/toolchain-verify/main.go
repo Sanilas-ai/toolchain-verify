@@ -45,6 +45,11 @@ Usage:
   toolchain-verify models [-m toolchain.toml] [--ollama-dir DIR]... [--ollama-url URL]
                           [--verify-blobs] [--no-ollama] [--external auto|require|off]
                           [--strict] [--json] [-v] [--list] [PATH]...
+  toolchain-verify scan  [--json|--sarif] [--baseline FILE] [--write-baseline FILE]
+                         [--ioc FILE]... [--ignore RULE[:GLOB]]... [--strict]
+                         [--max-file-size N] [--max-files N] [--max-depth N]
+                         [--timeout D] [--include-deps] [--strict-coverage] [-v] [-q] DIR
+  toolchain-verify mcp-tools [--pin FILE] [--write-pin FILE] [--json|--sarif] [--strict] TOOLS.json|-
   toolchain-verify pin   [-m toolchain.toml] [--root DIR] [--version exact|tilde|caret|min|keep]
                          [--no-sha256] [--path] [--tool NAME]... [--dry-run] [--ignore-container]
   toolchain-verify init  [-m toolchain.toml] [--force]
@@ -75,13 +80,24 @@ Usage:
          Never runs apt, dpkg, ufw or ss.
   policy decide whether a proposed command may run on the host or only via
          the sandbox (oss-run); for agent pre-exec hooks. Exit 1 = blocked.
+  scan   read-only scan of a repository for agent/IDE/package control files
+         (AGENTS.md, CLAUDE.md, rules, skills, MCP configs, agent hooks such
+         as SessionStart, .vscode/tasks.json folderOpen, CI workflows,
+         install hooks) and hidden instructions (Unicode Tags, zero-width,
+         bidi, HTML comments/hidden elements, entity-encoded text), with
+         versioned IOCs. Never runs git, installers, agents or MCP servers.
+         Exit 4 = INCOMPLETE (something was not checked; never a PASS).
+  mcp-tools  offline lint of a saved MCP tools/list result: description
+         and schema poisoning, hidden parameters, cross-tool instructions,
+         homoglyph names, shadowing, markdown-image exfiltration, toxic
+         flows; --pin/--write-pin detect rug pulls. Never connects.
   models read-only model artifact scan: SHA-256, GGUF/safetensors structure,
          pickle opcode scan (never unpickles), optional picklescan/modelscan,
          Ollama API + blob store report. PATHs are files or directories.
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage, manifest or
 refused-configuration error, 3 agent refused an untrusted working directory
-(--pre-session).
+(--pre-session), 4 scan incomplete.
 `
 
 // exitUntrustedCwd is returned by `agent --pre-session` when the working
@@ -117,6 +133,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdPolicy(args[1:], stdin, stdout, stderr)
 	case "models":
 		return cmdModels(args[1:], stdout, stderr)
+	case "scan":
+		return cmdScan(args[1:], stdout, stderr)
+	case "mcp-tools":
+		return cmdMCPTools(args[1:], stdin, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0

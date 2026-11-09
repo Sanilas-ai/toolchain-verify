@@ -267,6 +267,69 @@ store is consistent with its manifests and the running API.
 - GGUF v1 is not structure-checked; unknown ggml types skip the tensor-size check.
 - Ollama blobs are trusted by name unless `--verify-blobs` (reads every byte; on HP ~112 GiB).
 
+## Repository scan (`toolchain-verify scan`)
+
+A read-only scan of a checkout (your own repository or a third-party clone) for files that
+steer coding agents and tools: instructions, MCP and agent configs, editor tasks, CI
+workflows, package hooks and skill scripts. Each file is treated as untrusted data.
+
+### Threats → rules
+| Threat | Rules |
+|---|---|
+| Hidden instructions (tag smuggling, bidi, zero-width, variation selectors) | `unicode.*` (emoji ZWJ and RTL/Indic joiners allowed) |
+| Instructions hidden in markup (HTML/markdown comments, hidden styles, `<details>`, LaTeX white/phantom, entity runs) | `hidden.*`, `encoding.html-entities` |
+| Prompt injection in instruction files | `injection.*`: secret-exfil, decode-exec, markdown-exfil, override-action, install-first, config-rewrite, endpoint-redirect, approval-bypass, pipe-to-shell, override, exfil-endpoint. These are correlated signals per paragraph, not single keywords |
+| MCP configs: unpinned `npx`/`uvx` runners, typosquats, privileged containers, docker.sock, cleartext remotes | `mcp.*` |
+| Agent settings: auto-approve / YOLO, endpoint override, hooks, broad permissions | `agent.*` |
+| Editor auto-run (`folderOpen` tasks, disabled workspace trust) | `editor.*` |
+| CI: unpinned actions/images, pwn-request, script injection, `write-all` | `gha.*` |
+| Package lifecycle hooks (npm/gem/setup.py/binding.gyp/.pth) that download, decode, exec or exfiltrate | `pkg.*` |
+| Skill scripts | `skill.*` |
+| Known campaigns (versioned IOC DB `iocs.toml`, every entry with an https source) | `ioc.*` |
+| Secrets in configs | `secret.in-config` (evidence redacted) |
+| JSON/YAML duplicate keys (parser differential) | `config.duplicate-key` |
+| Silent changes between reviews | `control.new/changed/removed` via `--baseline` |
+
+`toolchain-verify mcp-tools FILE` lints an MCP `tools/list` result:
+- tool poisoning
+- markdown exfiltration
+- cross-tool instructions
+- schema poisoning, hidden parameters and schema defaults
+- homoglyph or invisible tool names
+- shadowing
+- toxic flow ("lethal trifecta")
+- rug pulls against a `--pin` file
+
+### Safety properties
+- The scan never runs git or any repository code. It does not follow symlinks; files are opened with `O_NOFOLLOW|O_NONBLOCK`.
+- Reads are bounded: max-file-size, max-files, depth, total bytes and a timeout.
+- It refuses `/` and `$HOME` as roots.
+- Any skipped or unparsable control file makes the verdict **INCOMPLETE** (exit 4), never PASS.
+- Images, archives and binaries are reported as coverage gaps. `--strict-coverage` turns them into INCOMPLETE.
+- Evidence is escaped (`\u{XXXX}`) and secrets are redacted.
+- Output is text, JSON or SARIF 2.1.0.
+- IOC hits are evidence of compromise. The tool never deletes or revokes anything; isolate the machine first (the strutil-core payload has a wiper).
+
+### Ideas taken from the catalog (reimplemented, no code copied)
+- golf-scanner: MCP config checks, typosquatting and container pinning.
+- MCP-Lattice and mcp-scan: tool poisoning, shadowing, rug pull and toxic flows.
+- cisco skill-scanner: skill scripts and markdown exfiltration.
+- AI-Infra-Guard and PurpleLlama: ASCII smuggling.
+- zizmor-style checks: GitHub Actions rules.
+- Socket research: the IOC DB.
+
+### Backlog (P1+)
+- Data-driven rule packs (YAML signatures, optional YARA via an external binary in the sandbox).
+- Dynamic MCP probe: start a server inside the oss-run sandbox with no network or credentials, call `tools/list` and pipe the result into `mcp-tools`.
+- OCR for instruction images, and scanning inside archives (zip/tar, bounded).
+- VS Code/Cursor extension (VSIX) audit, browser extension manifests.
+- A DLP egress proxy for agents (pipelock-style), possibly shared with browser-control.
+- Landlock/seccomp or microVM sandbox profiles (nono, microsandbox, OpenSandbox ideas).
+- Signed manifests and IOC DB signatures; registry provenance and container signature checks (golf-style).
+- More model formats: ONNX, Keras H5, TF SavedModel lambda layers (modelscan/fickling ideas).
+- Import a red-team corpus (agentdojo/spikee/PurpleLlama prompts) as offline regression fixtures for the detectors.
+- Pin our own CI actions to full SHAs. Currently `gha.unpinned-action` warns on our own `ci.yml`. A push of workflow changes needs a token with the `workflow` scope, so this is deferred.
+
 ## Layout
 
 - `internal/version` — parse/extract versions, compare, constraint grammar.
@@ -283,7 +346,8 @@ store is consistent with its manifests and the running API.
 - `internal/hostsec` — host audit: dpkg versions, apt lists, unattended-upgrades, kernel floors, snaps, `/proc/net` and `ss` parsing, ufw rules/status, reconciliation.
 - `internal/execpolicy` — shell command splitter and host-vs-sandbox policy decisions.
 - `internal/models` — model artifact scan: format sniffing, pickle opcode walk, safetensors/GGUF checks, Ollama store/API report, external scanners.
-- `cmd/toolchain-verify` — CLI (`check`, `pin`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `models`, `init`, `version`).
+- `internal/reposcan` — repository scan (`scan`) and MCP tool-list lint (`mcp-tools`); IOC DB `iocs.toml`.
+- `cmd/toolchain-verify` — CLI (`scan`, `mcp-tools`, `check`, `pin`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `models`, `init`, `version`).
 
 ## Possible next steps
 
