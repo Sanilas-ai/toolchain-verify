@@ -4,6 +4,15 @@ All notable changes to toolchain-verify are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [SemVer](https://semver.org/).
 
+## [0.1.2] — 2026-11-09
+
+### Fixed
+- `skill.secret-exfil`: require a strong credential path or named token env var.
+  Bare `process.env` / `os.environ` plus HTTP no longer fails — that pattern is
+  normal for skill tools and was a mass-scan false positive.
+
+[0.1.2]: https://github.com/Sanilas-ai/toolchain-verify/releases/tag/v0.1.2
+
 ## [0.1.1] — 2026-11-09
 
 ### Fixed

@@ -134,6 +134,16 @@ func firstMatch(canon string, names ...string) int {
 	return best
 }
 
+// strongSecretRead is true when canon names a credential file, a known
+// token env var, gh auth token, printenv, or /proc/.../environ. It does
+// NOT fire on bare process.env / os.environ, which skill tools use for
+// ordinary configuration.
+var strongSecretRe = regexp.MustCompile(`\.codex/auth\.json|\.claude/\.credentials|gh/hosts\.yml|\.git-credentials|\.aws/credentials|\.ssh/(id_|known_hosts|authorized)|\.npmrc|\.pypirc|\.netrc|\.gem/credentials|\.docker/config\.json|\.kube/config|oauth_creds|application_default_credentials|\bgh\s+auth\s+token\b|\bprintenv\b|\benv\s*\|\s*(curl|base64|nc)|\$\{?(gh_token|github_token|openai_api_key|anthropic_api_key|npm_token|aws_secret_access_key|aws_access_key_id|gitlab_token)\b|/proc/[^\s]*/environ`)
+
+func strongSecretRead(canon string) bool {
+	return strongSecretRe.MatchString(canon)
+}
+
 // verdictFor turns a set of signals found in one chunk of text into a
 // rule/severity. control: the text is something an agent loads as
 // instructions or runs (instruction file, hook, task, lifecycle script).
