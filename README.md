@@ -630,4 +630,4 @@ toolchain-verify models -m examples/models-hp.toml -v --list
 
 ---
 
-License: [Apache-2.0](LICENSE) · Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Changelog: [CHANGELOG.md](CHANGELOG.md)
+License: [Apache-2.0](LICENSE) · [NOTICE](NOTICE) · Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Changelog: [CHANGELOG.md](CHANGELOG.md)
