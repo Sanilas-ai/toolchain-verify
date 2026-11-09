@@ -1,0 +1,13 @@
+# Generic Hermes / NousResearch JSON-in-<tool_call> fallback.
+# Source: https://github.com/vllm-project/vllm/blob/main/examples/tool_chat_template_hermes.jinja
+
+id = "hermes"
+description = "Hermes-style <tool_call>{json}</tool_call>"
+format = "hermes_json"
+call_start = "<tool_call>"
+call_end = "</tool_call>"
+stop_sequences = ["</tool_call>", "<|im_end|>"]
+eos_token = "<|im_end|>"
+sources = [
+  "https://github.com/vllm-project/vllm/blob/main/examples/tool_chat_template_hermes.jinja",
+]

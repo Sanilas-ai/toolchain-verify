@@ -423,6 +423,24 @@ toolchain-verify pin --no-sha256 --dry-run    # show changes, write nothing
 
 ---
 
+
+### Tool-call parser (small local models)
+
+`toolchain-verify toolcall` keeps the **first complete valid** tool call from
+models that do not stop cleanly (LFM3, MiniCPM5, Hermes, LFM2), validates
+arguments against a JSON Schema allowlist, strips/flags hidden Unicode, gates
+sensitive classes on `/dev/tty`, and validates Obsessive-style grounded
+search answers. Formats and stop sequences are pinned from each model's
+published chat template — see [docs/toolcall.md](docs/toolcall.md).
+
+```bash
+toolchain-verify toolcall profiles
+toolchain-verify toolcall parse --profile minicpm5 --tools tools.json --no-tty generation.txt
+toolchain-verify toolcall bench --profile minicpm5 --tools tools.json ./transcripts
+toolchain-verify toolcall grounded --source page.txt answer.txt
+```
+
+
 ## Русский
 
 `toolchain-verify` — CLI для проверки тулчейна по декларативному манифесту

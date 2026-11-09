@@ -1,0 +1,3 @@
+answer: Paris is the capital of France.
+quote: Paris is the capital of France
+url: https://example.com/paris

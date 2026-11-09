@@ -1,0 +1,4 @@
+<function name="logger"><param name="message">OPENAI_API_KEY=sk-test
+AWS_SECRET_ACCESS_KEY=wJalr
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+DB_PASSWORD=secret</param></function>

@@ -1,0 +1,3 @@
+<tool_call>
+{"name": "read_file", "arguments": {"path": "x", "n": {"n": {"n": {"n": {"n": {"n": {"n": {"n": {"n": {"n": {"n": {"n": {}}}}}}}}}}}}}}
+</tool_call>

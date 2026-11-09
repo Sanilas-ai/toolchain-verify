@@ -1,0 +1,100 @@
+[
+  {
+    "name": "get_weather",
+    "description": "Get weather for a city",
+    "description_sha256": "b4e26f06e632ed4233184717739c5e781f59f0795a48d55879f4d146da774f9c",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "units": {
+          "type": "string",
+          "enum": [
+            "celsius",
+            "fahrenheit"
+          ]
+        }
+      },
+      "required": [
+        "city"
+      ],
+      "additionalProperties": false
+    },
+    "class": "network"
+  },
+  {
+    "name": "search",
+    "description": "Search the web",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "class": "network"
+  },
+  {
+    "name": "read_file",
+    "description": "Read a file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "class": "safe"
+  },
+  {
+    "name": "write_file",
+    "description": "Write a file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "class": "file_write"
+  },
+  {
+    "name": "logger",
+    "description": "Log a message",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "class": "safe"
+  }
+]

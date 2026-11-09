@@ -1,0 +1,10 @@
+<tool_call>
+<function=get_weather>
+<parameter=city>
+Berlin
+</parameter>
+<parameter=units>
+celsius
+</parameter>
+</function>
+</tool_call>
