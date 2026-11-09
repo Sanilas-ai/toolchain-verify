@@ -49,6 +49,7 @@ Usage:
                          [--ioc FILE]... [--ignore RULE[:GLOB]]... [--strict]
                          [--max-file-size N] [--max-files N] [--max-depth N]
                          [--timeout D] [--include-deps] [--strict-coverage] [-v] [-q] DIR
+  toolchain-verify mcp-tools [--pin FILE] [--write-pin FILE] [--json|--sarif] [--strict] TOOLS.json|-
   toolchain-verify pin   [-m toolchain.toml] [--root DIR] [--version exact|tilde|caret|min|keep]
                          [--no-sha256] [--path] [--tool NAME]... [--dry-run] [--ignore-container]
   toolchain-verify init  [-m toolchain.toml] [--force]
@@ -86,6 +87,10 @@ Usage:
          bidi, HTML comments/hidden elements, entity-encoded text), with
          versioned IOCs. Never runs git, installers, agents or MCP servers.
          Exit 4 = INCOMPLETE (something was not checked; never a PASS).
+  mcp-tools  offline lint of a saved MCP tools/list result: description
+         and schema poisoning, hidden parameters, cross-tool instructions,
+         homoglyph names, shadowing, markdown-image exfiltration, toxic
+         flows; --pin/--write-pin detect rug pulls. Never connects.
   models read-only model artifact scan: SHA-256, GGUF/safetensors structure,
          pickle opcode scan (never unpickles), optional picklescan/modelscan,
          Ollama API + blob store report. PATHs are files or directories.
@@ -130,6 +135,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdModels(args[1:], stdout, stderr)
 	case "scan":
 		return cmdScan(args[1:], stdout, stderr)
+	case "mcp-tools":
+		return cmdMCPTools(args[1:], stdin, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0

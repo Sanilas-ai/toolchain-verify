@@ -16,6 +16,7 @@ const (
 	KindEditorConfig = "editor-config" // .vscode/settings.json
 	KindWorkflow     = "ci-workflow"   // .github/workflows/*.yml, action.yml
 	KindPackageHook  = "package-hook"  // package.json, extconf.rb, *.gemspec, setup.py, .pth
+	KindSkillScript  = "skill-script"  // scripts shipped next to a SKILL.md
 )
 
 // classify returns the control kind of a slash-separated path relative to

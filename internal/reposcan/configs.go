@@ -276,6 +276,8 @@ func hiddenScriptRef(cmd string) string {
 	return ""
 }
 
+var containerRunRe = regexp.MustCompile(`\b(docker|podman|nerdctl)\s+(container\s+)?run\b`)
+
 var runnerRe = regexp.MustCompile(`^(npx|uvx|bunx|pnpm|yarn|pipx|uv)$`)
 
 func (s *scanner) mcpServers(rel string, srvs *jnode) {
@@ -383,6 +385,12 @@ func (s *scanner) judgeMCP(rel string, line int, name, full string, extra []stri
 	if ioc := s.opt.IOCs.matchText(canon); ioc != "" {
 		sev = SevFail
 		reasons = append(reasons, "IOC "+ioc)
+	}
+	if containerRunRe.MatchString(canon) && !strings.Contains(canon, "@sha256:") {
+		if sev == SevInfo {
+			sev = SevWarn
+		}
+		reasons = append(reasons, "container image not pinned by digest")
 	}
 	if strings.Contains(canon, "--privileged") || strings.Contains(canon, "docker.sock") || regexp.MustCompile(`-v\s+/:/`).MatchString(canon) {
 		sev = SevFail
@@ -602,6 +610,38 @@ func (s *scanner) scanPackageHook(rel string, b []byte) {
 			}
 		}
 	}
+}
+
+// judgeSkillScript: scripts bundled with an agent skill run with the
+// agent's privileges when the skill is used (Cisco skill-scanner threat
+// model). HTTP + subprocess is normal for tools, so only decode->exec,
+// secret->network, pipe-to-shell and IOCs fail; download-and-run warns.
+func (s *scanner) judgeSkillScript(rel string, b []byte) {
+	canon := canonical(string(b))
+	sig := signals(canon)
+	var rule, sev string
+	switch r, _ := verdictFor(sig, false); {
+	case r == "injection.secret-exfil" || r == "injection.decode-exec":
+		rule, sev = "skill."+strings.TrimPrefix(r, "injection."), SevFail
+	case sig[sigPipeShell]:
+		rule, sev = "skill.pipe-to-shell", SevFail
+	case sig[sigExfil]:
+		rule, sev = "skill.exfil-endpoint", SevWarn
+	}
+	if ioc := s.opt.IOCs.matchText(canon); ioc != "" {
+		rule, sev = "skill.ioc", SevFail
+	}
+	if rule == "" {
+		return
+	}
+	off := firstMatch(canon, sigSecretRead, sigDecode, sigPipeShell, sigExfil, sigNetwork)
+	if off < 0 {
+		off = 0
+	}
+	s.add(Finding{Rule: rule, Severity: sev, Path: rel, Line: lineOf([]byte(canon), off), Evidence: escapeEvidence(snippetAround([]byte(canon), off, 140), evidenceRunes),
+		Signals: sigList(sig), Message: "script bundled with an agent skill (runs when the skill is used) has a risky pattern",
+		Fix:  "review the script; skills from third parties are code, not documentation",
+		Refs: []string{"https://github.com/cisco-ai-defense/skill-scanner"}})
 }
 
 // judgeLifecycle: install hooks are normal (native builds); report info,

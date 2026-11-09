@@ -10,21 +10,22 @@ import (
 // Signal names. A signal is a hint; findings are raised for combinations
 // (see judgeText), never for a single phrase in ordinary documentation.
 const (
-	sigOverride     = "instruction-override"
-	sigConceal      = "conceal-from-user"
-	sigForgedRole   = "forged-role-marker"
-	sigInstallFirst = "install-first"
-	sigInstall      = "package-install"
-	sigApproval     = "approval-bypass"
-	sigConfigWrite  = "agent-config-rewrite"
-	sigGlobalConfig = "global-config-target"
-	sigEndpoint     = "endpoint-redirect"
-	sigSecretRead   = "secret-read"
-	sigNetwork      = "network"
-	sigExfil        = "exfil-endpoint"
-	sigDecode       = "decode"
-	sigExec         = "exec"
-	sigPipeShell    = "pipe-to-shell"
+	sigOverride      = "instruction-override"
+	sigConceal       = "conceal-from-user"
+	sigForgedRole    = "forged-role-marker"
+	sigInstallFirst  = "install-first"
+	sigInstall       = "package-install"
+	sigApproval      = "approval-bypass"
+	sigConfigWrite   = "agent-config-rewrite"
+	sigGlobalConfig  = "global-config-target"
+	sigMarkdownExfil = "markdown-exfil"
+	sigEndpoint      = "endpoint-redirect"
+	sigSecretRead    = "secret-read"
+	sigNetwork       = "network"
+	sigExfil         = "exfil-endpoint"
+	sigDecode        = "decode"
+	sigExec          = "exec"
+	sigPipeShell     = "pipe-to-shell"
 )
 
 type sigDef struct {
@@ -42,6 +43,7 @@ var sigDefs = []sigDef{
 	{sigInstallFirst, regexp.MustCompile(`\b(before|prior\s+to)\s+(doing\s+anything|any\s+other|your\s+first|running\s+any|you\s+(start|begin|do\s+anything)|answering|responding)[^.\n]{0,100}\b(run|install|execute|download|curl|wget)\b|\b(first|always)\s*,?\s+(run|install|execute)\s+[^.\n]{0,60}(setup|install|init|bootstrap)|сначала\s+(установи|запусти|выполни)|перед\s+(началом|первой|любой)[^.\n]{0,60}(установи|запусти|выполни)`)},
 	{sigInstall, regexp.MustCompile(`\b(npm|pnpm|yarn|bun)\s+(i|install|add)\b|\bpip3?\s+install\b|\buv\s+(pip\s+install|add|tool\s+install)\b|\bnpx\s+(-y|--yes)\b|\bgem\s+install\b|\bgo\s+install\b|\bcargo\s+install\b`)},
 	{sigApproval, regexp.MustCompile(`--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|\bbypasspermissions\b|approval[_-]?policy\s*[=:]\s*"?never|danger-full-access|--yolo\b|\byolo\s+mode\b|\bauto[-_ ]?approve\s*[=:]\s*(true|\[\s*"\*")|\balwaysallow\b|\b(do\s+not|don't|never)\s+ask\s+(the\s+user\s+)?(for\s+)?(permission|confirmation|approval)|\bskip\s+(all\s+|the\s+)?(confirmations?|approvals?|permission\s+prompts?)|не\s+спрашивай\s+(разрешени|подтвержд)|без\s+(подтверждения|разрешения)\s+пользовател`)},
+	{sigMarkdownExfil, regexp.MustCompile(`!\[[^\]]*\]\(\s*https?://[^)\s]{0,200}(\{\{?[^}]+\}\}?|\$\{[^}]+\}|<[a-z_]+>)[^)]*\)|(render|display|show|output|insert|embed)\s+(a\s+)?(markdown\s+)?(image|img|picture)\s+(with|where|containing|whose\s+url)\s+.{0,80}(data|secret|key|token|password|env|conversation|history)`)},
 	{sigGlobalConfig, regexp.MustCompile(`(~|\$home|\$\{home\}|%userprofile%|/home/[a-z0-9_.-]+|/root)/\.(codex|claude|cursor|gemini|config/(code|cursor|claude)|bashrc|zshrc|profile|ssh/authorized_keys|npmrc)|mcpservers|mcp_servers|\bcrontab\b|authorized_keys`)},
 	{sigConfigWrite, regexp.MustCompile(`(write|add|append|insert|modify|update|edit|create|overwrite|replace|echo|tee|cat\s*>|>>?|добавь|измени|запиши|создай)[^\n]{0,120}(\.codex/config\.toml|\.claude/settings(\.local)?\.json|\.claude\.json|claude_desktop_config\.json|\.cursor/mcp\.json|\.gemini/settings\.json|\.vscode/(mcp|tasks|settings)\.json|\.mcp\.json|mcpservers|mcp_servers|\.bashrc|\.zshrc|\.profile|authorized_keys|crontab)`)},
 	{sigEndpoint, regexp.MustCompile(`\b(anthropic_base_url|openai_base_url|openai_api_base|anthropic_api_url|gemini_api_base|azure_openai_endpoint)\b\s*[=:]`)},
@@ -139,6 +141,8 @@ func verdictFor(s map[string]bool, control bool) (rule, sev string) {
 		return "injection.secret-exfil", SevFail
 	case s[sigDecode] && (s[sigExec] || s[sigPipeShell]):
 		return "injection.decode-exec", SevFail
+	case s[sigMarkdownExfil] && control:
+		return "injection.markdown-exfil", SevFail
 	case manip && action:
 		return "injection.override-action", SevFail
 	case s[sigInstallFirst] && (s[sigInstall] || s[sigPipeShell] || s[sigNetwork] || s[sigExec]):

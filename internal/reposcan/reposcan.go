@@ -155,6 +155,8 @@ type scanner struct {
 	refs []cmdRef
 	// files present, for IOC path checks
 	present map[string]bool
+	// directories holding a SKILL.md: scripts there run as agent tools
+	skillDirs []string
 }
 
 type cmdRef struct {
@@ -412,6 +414,18 @@ func (s *scanner) file(p, rel string) {
 			Message: "control file is not valid UTF-8; clients may decode it differently than this scanner"})
 	}
 	s.hashIOCBytes(rel, b, partial)
+	if kind == KindInstructions && strings.EqualFold(base, "skill.md") {
+		s.skillDirs = append(s.skillDirs, path.Dir(rel))
+	}
+	if kind == "" && isScriptName(rel) && !isDataName(rel) {
+		for _, d := range s.skillDirs {
+			if d == "." || strings.HasPrefix(rel, d+"/") {
+				s.rep.Inventory = append(s.rep.Inventory, ControlFile{Path: rel, Kind: KindSkillScript, Size: size, SHA256: sha(b, partial)})
+				s.judgeSkillScript(rel, b)
+				break
+			}
+		}
+	}
 	s.scanText(rel, kind, b)
 	switch kind {
 	case KindMCP, KindAgentConfig, KindEditorTasks, KindEditorConfig:
@@ -441,6 +455,23 @@ func isBinary(b []byte) bool {
 		if c == 0 {
 			return true
 		}
+	}
+	return false
+}
+
+func sha(b []byte, partial bool) string {
+	if partial {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// isDataName: structured data next to a skill is not a script.
+func isDataName(rel string) bool {
+	switch strings.ToLower(path.Ext(rel)) {
+	case ".json", ".yml", ".yaml", ".toml":
+		return true
 	}
 	return false
 }
