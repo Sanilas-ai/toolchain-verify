@@ -1,6 +1,17 @@
 # Changelog
 
-## [Unreleased]
+All notable changes to toolchain-verify are documented here.
+Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+this project uses [SemVer](https://semver.org/).
+
+## [0.1.4] — 2026-11-10
+
+### Added
+- `toolchain-verify toolcall`: a pure-Go parser that keeps the first complete
+  valid tool call from small local models (LFM3, LFM2, MiniCPM5, Hermes
+  profiles), with schema validation, an allowlist, description SHA-256 pins,
+  and a tty gate for sensitive classes.
+- Apache-2.0 NOTICE is now shipped in the release archives alongside LICENSE.
 
 ### Fixed
 - `agent --pre-session` without trusted roots is no longer a silent PASS (fail-open).
@@ -16,11 +27,14 @@
 - `check`: when a relative `path` glob does not match, the error now states that
   relative globs resolve against the manifest directory and shows the resolved
   pattern.
+- `agent` lists each exec-capable surface (kind, path, why) as `policy.exec-surface`.
+  `policy.require-container` is INFO when already running in a container, not WARN.
+  `DetectContainer` ignores a bare `$container` environment variable.
 
+### Docs
+- Published the 2026-11 mass-scan aggregate report.
 
-All notable changes to toolchain-verify are documented here.
-Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-this project uses [SemVer](https://semver.org/).
+[0.1.4]: https://github.com/Sanilas-ai/toolchain-verify/releases/tag/v0.1.4
 
 ## [0.1.3] — 2026-11-09
 
