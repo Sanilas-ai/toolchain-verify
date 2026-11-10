@@ -30,8 +30,8 @@ const usage = `toolchain-verify — verify a development toolchain against a man
 Usage:
   toolchain-verify check [-m toolchain.toml] [--root DIR] [--json] [-v] [--timeout 10s]
   toolchain-verify agent [-m toolchain.toml] [--trusted DIR]... [--advisories FILE]...
-                         [--strict] [--json|--sarif] [-v] [-q] [--list-advisories]
-                         [--pre-session] [--allow-untrusted-cwd]
+                         [--scope repo|trusted-roots] [--strict] [--json|--sarif] [-v] [-q]
+                         [--list-advisories] [--pre-session] [--allow-untrusted-cwd]
                          [--quarantine [--quarantine-dir DIR]] [--no-host-inventory]
   toolchain-verify exec-lint [-m toolchain.toml] [--fail] [--strict] [--wrapper NAME]...
                          [--include-tests] [--json] [-v] [-q] [PATH...]
@@ -65,7 +65,10 @@ Usage:
          files, vulnerable agent stacks (Flowise, Langflow, PraisonAI, ...),
          MCP/approval settings, credential permissions, package-index setup.
          Never executes binaries and never opens credential files.
-         --pre-session   fast gate before starting an agent: only the cwd
+         --pre-session   fast gate before starting an agent: only the cwd;
+                         exit 4 (INCOMPLETE) when no trusted roots are set
+         --scope         instruction walk scope under --trusted (repo default,
+                         or trusted-roots for the previous full walk)
          --quarantine    move planted instruction/MCP files out of untrusted
                          dirs (the only option that changes anything)
   exec-lint  find subprocess/exec/eval calls in files that handle LLM output
@@ -101,7 +104,8 @@ Usage:
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage, manifest or
 refused-configuration error, 3 agent refused an untrusted working directory
-(--pre-session), 4 scan incomplete.
+(--pre-session), 4 incomplete (scan coverage gap, or --pre-session with no
+trusted roots configured).
 `
 
 // exitUntrustedCwd is returned by `agent --pre-session` when the working
@@ -287,6 +291,7 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(path, "manifest", manifest.DefaultFile, "manifest with an [agent] section (optional)")
 	var trusted, advisories multiFlag
 	fs.Var(&trusted, "trusted", "trusted project root (repeatable; adds to agent.trusted_roots)")
+	scope := fs.String("scope", "repo", "instruction walk under trusted roots: repo (git toplevel/cwd, default) or trusted-roots (full walk)")
 	fs.Var(&advisories, "advisories", "extra advisory database TOML (repeatable)")
 	noBuiltin := fs.Bool("no-builtin-advisories", false, "do not load the embedded advisory database")
 	strict := fs.Bool("strict", false, "warnings fail the run")
@@ -335,7 +340,7 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 
 	var pol *agent.Policy
 	opt := agent.Options{Home: h, Cwd: cwd, InContainer: check.DetectContainer(), ExtraTrusted: trusted,
-		ExtraAdvisories: advisories, NoBuiltinAdvisories: *noBuiltin, Strict: *strict,
+		Scope: *scope, ExtraAdvisories: advisories, NoBuiltinAdvisories: *noBuiltin, Strict: *strict,
 		AllowUntrustedCwd: *allowCwd, Quarantine: *quarantine, QuarantineDir: *quarantineDir, NoHostInventory: *noHost}
 	explicit := flagSet(fs, "m", "manifest")
 	mpath := *path
@@ -373,7 +378,7 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error:", err)
 		return 2
 	}
-	if !(*quiet && rep.OK && err == nil) {
+	if !(*quiet && rep.OK && err == nil && !rep.Incomplete) {
 		switch {
 		case *asJSON:
 			enc := json.NewEncoder(stdout)
@@ -395,6 +400,9 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 	}
 	if !rep.OK {
 		return 1
+	}
+	if rep.Incomplete {
+		return exitIncomplete
 	}
 	return 0
 }
@@ -460,6 +468,8 @@ func printAgent(w io.Writer, rep *agent.Report, verbose bool) {
 	verdict := "PASS"
 	if !rep.OK {
 		verdict = "FAIL"
+	} else if rep.Incomplete {
+		verdict = "INCOMPLETE"
 	}
 	extra := ""
 	if rep.Ignored > 0 {

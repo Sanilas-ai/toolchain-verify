@@ -133,8 +133,10 @@ func checkTool(t *manifest.Tool, manifestDir string, opt Options) Result {
 
 	if t.Path != "" {
 		pat := t.Path
-		if !filepath.IsAbs(pat) {
-			base := manifestDir
+		rel := !filepath.IsAbs(pat)
+		base := ""
+		if rel {
+			base = manifestDir
 			if opt.Root != "" {
 				base = opt.Root
 			}
@@ -144,7 +146,15 @@ func checkTool(t *manifest.Tool, manifestDir string, opt Options) Result {
 		if err != nil {
 			fail("bad path pattern %q: %v", t.Path, err)
 		} else if !re.MatchString(filepath.ToSlash(found)) && !re.MatchString(filepath.ToSlash(r.Resolved)) {
-			fail("path %s (resolved %s) does not match %q", found, r.Resolved, pat)
+			if rel {
+				where := "the manifest directory"
+				if opt.Root != "" {
+					where = "--root"
+				}
+				fail("path %s (resolved %s) does not match %q (relative path globs resolve against %s %s; resolved pattern: %s)", found, r.Resolved, t.Path, where, base, pat)
+			} else {
+				fail("path %s (resolved %s) does not match %q", found, r.Resolved, pat)
+			}
 		}
 	}
 

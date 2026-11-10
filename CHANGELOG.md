@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `agent --pre-session` without trusted roots is no longer a silent PASS (fail-open).
+  It now emits `policy.no-trusted-roots` (warn) and returns exit `4` (INCOMPLETE).
+  Configure `--trusted` / `agent.trusted_roots` for a complete pre-session gate.
+- `agent --trusted DIR` no longer walks every checkout under a wide trusted root by
+  default. Instruction/MCP walks are scoped to the current git repository (or cwd).
+  Pass `--scope=trusted-roots` to restore the previous full walk.
+- `.vscode/settings.json` and similar editor settings files are flagged as
+  `mcp.writable` only when they actually contain MCP-related keys (`mcp`,
+  `mcpServers`, `chat.mcp.*`, `mcp.*`, …). An eslint-only settings file produces
+  no finding.
+- `check`: when a relative `path` glob does not match, the error now states that
+  relative globs resolve against the manifest directory and shows the resolved
+  pattern.
+
+
 All notable changes to toolchain-verify are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [SemVer](https://semver.org/).

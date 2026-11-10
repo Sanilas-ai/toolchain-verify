@@ -23,6 +23,12 @@ type Options struct {
 	ExtraAdvisories []string
 	// ExtraTrusted are trusted roots given on the command line.
 	ExtraTrusted []string
+	// Scope controls how far instruction/MCP walks go under trusted roots.
+	// "" or "repo" (default): walk only the current git repository (or cwd)
+	// when it lies inside a trusted root. "trusted-roots": walk every
+	// trusted root in full (previous behaviour; noisy when --trusted points
+	// at a polygon that holds many checkouts).
+	Scope string
 	// NoBuiltinAdvisories disables the embedded database.
 	NoBuiltinAdvisories bool
 	// Strict makes warnings fail.
@@ -65,6 +71,7 @@ var ErrUntrustedCwd = fmt.Errorf("%w: working directory is an untrusted location
 type resolved struct {
 	home, cwd       string
 	trusted         []string
+	scope           string // "repo" (default) or "trusted-roots"
 	untrusted       []string
 	forbidCwd       []string
 	instrPatterns   []string
@@ -131,6 +138,14 @@ func resolve(p *Policy, opt Options) (*resolved, error) {
 	base := opt.ManifestDir
 	h := r.home
 	r.trusted = expandAll(append(append([]string{}, p.TrustedRoots...), opt.ExtraTrusted...), h, base)
+	switch opt.Scope {
+	case "", "repo":
+		r.scope = "repo"
+	case "trusted-roots":
+		r.scope = "trusted-roots"
+	default:
+		return nil, fmt.Errorf("agent scope %q: want \"repo\" or \"trusted-roots\"", opt.Scope)
+	}
 	if len(p.UntrustedDirs) > 0 {
 		r.untrusted = expandAll(p.UntrustedDirs, h, base)
 	} else {
@@ -421,6 +436,17 @@ func RunPreSession(p *Policy, opt Options) (*Report, error) {
 	}
 	strict := opt.Strict || (p != nil && p.Strict)
 	rep := &Report{InContainer: r.inContainer, Home: r.home, Cwd: r.cwd, Strict: strict, TrustedRoots: r.trusted, PreSession: true}
+	// Without trusted roots, --pre-session cannot tell whether cwd instruction
+	// files are outside a trust boundary (cwd.instructions stays warn-only).
+	// That used to look like PASS ("fail-open"). Mark the run Incomplete so
+	// the CLI returns exit 4 rather than 0; a WARN finding alone would still
+	// finish() with OK=true.
+	if len(r.trusted) == 0 {
+		c.add(Finding{Rule: "policy.no-trusted-roots", Severity: SevWarn,
+			Message: "no trusted roots configured; --pre-session cannot decide whether working-directory instruction files are outside a trust boundary",
+			Fix:     "pass --trusted DIR or set agent.trusted_roots in the manifest before using --pre-session as a start gate"})
+		rep.Incomplete = true
+	}
 	checkCwd(r, c)
 	cwd := filepath.Clean(r.cwd)
 	if d, ut := r.isUntrustedDir(cwd); ut {

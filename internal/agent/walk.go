@@ -131,3 +131,20 @@ func normalizeDownloadName(name string) string {
 	}
 	return name
 }
+
+// gitToplevel walks parents of cwd looking for a .git entry (dir or file).
+// It does not execute git, matching the agent's "never run binaries" rule.
+// Returns "" when cwd is not inside a git work tree.
+func gitToplevel(cwd string) string {
+	dir := filepath.Clean(cwd)
+	for {
+		if st, err := os.Lstat(filepath.Join(dir, ".git")); err == nil && (st.IsDir() || st.Mode().IsRegular()) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}

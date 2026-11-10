@@ -160,3 +160,86 @@ func TestLocateSkipsRelativePathEntries(t *testing.T) {
 		t.Errorf("absolute PATH entry: %s %v", p, err)
 	}
 }
+
+func TestRelativePathGlobErrorMentionsManifestDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	os.Mkdir(bin, 0o755)
+	writeTool(t, bin, "faketool", "faketool version 1.0.0")
+	mfDir := filepath.Join(root, "manifests")
+	os.Mkdir(mfDir, 0o755)
+	no := false
+	m, err := manifest.Parse([]byte(`
+[[tool]]
+name = "faketool"
+version = ">=1.0"
+path = "wrong/bin/faketool"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Dir = mfDir
+	rep := Run(m, filepath.Join(mfDir, "toolchain.toml"), Options{Root: root, InContainer: &no})
+	if rep.OK {
+		t.Fatal("expected fail")
+	}
+	var problems []string
+	for _, tr := range rep.Tools {
+		if tr.Name == "faketool" {
+			problems = tr.Problems
+		}
+	}
+	joined := strings.Join(problems, "; ")
+	if !strings.Contains(joined, "relative path globs resolve against") {
+		t.Fatalf("missing relative-glob hint: %s", joined)
+	}
+	// With Options.Root set, relative globs resolve against --root (documented).
+	if !strings.Contains(joined, root) {
+		t.Fatalf("missing resolved base %s in: %s", root, joined)
+	}
+	if !strings.Contains(joined, "resolved pattern:") {
+		t.Fatalf("missing resolved pattern: %s", joined)
+	}
+}
+
+func TestRelativePathGlobAgainstManifestDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	os.Mkdir(bin, 0o755)
+	writeTool(t, bin, "faketool", "faketool version 1.0.0")
+	// Put the binary on PATH and leave Options.Root empty so relative globs
+	// resolve against the manifest directory.
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", bin+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+	mfDir := filepath.Join(root, "manifests")
+	os.Mkdir(mfDir, 0o755)
+	no := false
+	m, err := manifest.Parse([]byte(`
+[[tool]]
+name = "faketool"
+version = ">=1.0"
+path = "wrong/bin/faketool"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Dir = mfDir
+	rep := Run(m, filepath.Join(mfDir, "toolchain.toml"), Options{InContainer: &no})
+	var problems []string
+	for _, tr := range rep.Tools {
+		if tr.Name == "faketool" {
+			problems = tr.Problems
+		}
+	}
+	joined := strings.Join(problems, "; ")
+	if !strings.Contains(joined, "manifest directory") || !strings.Contains(joined, mfDir) {
+		t.Fatalf("expected manifest-dir hint, got: %s", joined)
+	}
+}

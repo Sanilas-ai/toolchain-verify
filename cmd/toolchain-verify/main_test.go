@@ -245,3 +245,25 @@ func TestModelsCommand(t *testing.T) {
 		t.Fatalf("/ should be refused with code 2, got %d", code)
 	}
 }
+
+func TestAgentPreSessionNoTrustedRootsIncomplete(t *testing.T) {
+	home := t.TempDir()
+	proj := filepath.Join(home, "proj")
+	os.MkdirAll(proj, 0o755)
+	var out, errb bytes.Buffer
+	// No --trusted and no manifest agent.trusted_roots: must be INCOMPLETE (4).
+	code := run([]string{"agent", "--pre-session", "--allow-untrusted-cwd", "--no-host-inventory", "--home", home, "--cwd", proj, "--no-builtin-advisories"}, &out, &errb)
+	if code != exitIncomplete {
+		t.Fatalf("exit %d, want %d\n%s%s", code, exitIncomplete, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "policy.no-trusted-roots") || !strings.Contains(out.String(), "INCOMPLETE") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+	// With --trusted, same cwd is PASS.
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"agent", "--pre-session", "--no-host-inventory", "--home", home, "--cwd", proj, "--trusted", proj, "--no-builtin-advisories", "-q"}, &out, &errb)
+	if code != 0 || out.Len() != 0 {
+		t.Fatalf("trusted pre-session: exit %d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
