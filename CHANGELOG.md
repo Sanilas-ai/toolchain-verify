@@ -4,6 +4,27 @@ All notable changes to toolchain-verify are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Agent sandbox-isolation rules (`agent`): `agent.sandbox-approval-matrix`
+  models the Codex `sandbox_mode` × `approval_policy` grid (danger-full-access
+  + never = critical fail); `agent.no-isolation` flags Anthropic
+  sandbox-runtime (`~/.srt-settings.json`) settings that weaken filesystem /
+  network isolation, `--dangerously-*` bypass flags and Claude `sandbox:false`.
+- MCP server isolation/secret rules: `mcp.no-isolation` warns on a stdio MCP
+  server launched as a bare host process (no container / srt);
+  `mcp.secrets-in-env` fails on a literal secret passed on the command line
+  (world-visible via `ps`).
+- `mcp-lock` subcommand: a lock file for MCP servers recording launch package,
+  exact version and a sha256 integrity hash per server (mcpd-style). Verify
+  catches version drift / package substitution (`mcp.lock`), unpinned
+  `pkg@latest` (`mcp.lock-unpinned`) and new/removed servers; `--tools` folds
+  tool-definition hashes to also flag rug-pulls.
+- Docs: `docs/agent-isolation.md` (rules + Codex sandbox×approval reference
+  matrix + CWE mapping); agent-trace analysis backlog in `DESIGN.md`
+  (Invariant source→sink, TaskTracker probes, NeMo Guardrails comparison).
+
 ## [0.1.4] — 2026-11-10
 
 ### Added
