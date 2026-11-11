@@ -82,3 +82,51 @@ here. LFM3 also needs llama.cpp ≥ b11960 (v0.8.0) / Ollama ≥ v0.40.12 (Linux
 v0.40.13+); NVFP4 on older builds silently produces wrong output — always
 record the runtime version in `--runtime-note`. Fixture `toolcall bench` is
 the supported path until a compatible runtime exists.
+
+## Bench candidates and eval metrics (2T refs, 2026-11-11)
+
+### Constrained decoding is not a safety guarantee
+
+Schema- / grammar-constrained decoding (e.g. Cactus **Needle 3**, 25–121M,
+schema-constrained output, [overview](https://ainews.leverageai.com.au/case/cactus-needle3-on-device-automation))
+guarantees a *syntactically valid* tool call — never a *correct or safe*
+action. The community reports Needle 3 picking the wrong tool and giving
+confident bad answers on indirect/ambiguous commands. So this parser keeps a
+**deterministic action verifier on top of** whatever the model emits:
+
+- tool + argument **allowlist** and JSON-schema validation (already enforced),
+- a **policy** gate (sensitive classes require a TTY `yes`; model output is
+  never `eval`'d or shelled),
+
+i.e. "schema-valid ≠ semantically safe" — the grammar constrains the shape,
+the verifier constrains the effect.
+
+### Eval metrics the bench should report
+
+Measure more than tool-call accuracy. For each candidate record, alongside
+accuracy:
+
+- **unsafe-response rate under prompt injection** — share of responses that
+  take the injected action (the number that actually matters for an external
+  gate),
+- **loop rate / step-limit hits** — share of runs that loop in repeated
+  reasoning or run into the context/step limit without finishing.
+
+### Candidates
+
+Existing profiles: **LFM3-1.7B** (`lfm3`) and
+**MiniCPM5-1B-Agentic-Tooluse-v3** (`minicpm5`). Third candidate:
+
+- **BotPsy** (Tether AI Research / QVAC), 0.8B, on the **Qwen3.5-0.8B** base,
+  Apache-2.0 (research/educational), bf16/Q8/Q4, **GGUF for llama.cpp pending**
+  — [model blog](https://huggingface.co/blog/qvac/botpsy). Vendor-reported:
+  unsafe-under-prompt-injection **31% vs 46%** baseline; IFBench reasoning-loop
+  rate **1.4% vs 22.9%**; 32k-limit hits 0.2% vs 28.3%. It is the lightest
+  tier (below LFM3-1.7B and MiniCPM5-1B).
+
+  Caveats: numbers are vendor-reported and not re-verified here; trained mostly
+  on **English** (no Russian claimed); 31% unsafe under injection still needs
+  an external gate — exactly why the deterministic action verifier above is
+  mandatory, not optional. Add a `botpsy` profile once a GGUF and the
+  chat-template delimiters/stop-sequences are published; until then it stays a
+  fixture-only bench candidate like the others on this AVX-less HP.
