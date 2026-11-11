@@ -27,12 +27,14 @@ var DefaultMCPConfigs = []string{
 	".config/Code/User/settings.json",
 	".config/Cursor/User/settings.json",
 	".config/zed/settings.json",
+	".srt-settings.json",
 }
 
 // projectMCPConfigs are looked up in the working directory.
 var projectMCPConfigs = []string{
 	".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json", ".vscode/settings.json",
 	".gemini/settings.json", ".codex/config.toml", ".claude/settings.json", ".claude/settings.local.json",
+	".srt-settings.json",
 }
 
 type mcpServer struct {
@@ -379,6 +381,7 @@ func auditServer(r *resolved, c *collector, path string, s mcpServer) []ExecSurf
 				Message: fmt.Sprintf("%s: header %s holds a literal secret in the config file (value not shown)", id, k)})
 		}
 	}
+	auditServerIsolation(r, c, path, s)
 	return surfaces
 }
 
@@ -511,6 +514,7 @@ func auditAgentSettings(r *resolved, c *collector, path string, doc map[string]a
 			}
 		}
 	}
+	auditIsolation(r, c, path, doc)
 	return surfaces
 }
 
