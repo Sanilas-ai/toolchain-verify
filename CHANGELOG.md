@@ -4,6 +4,25 @@ All notable changes to toolchain-verify are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `host vps` (also `--profile vps`; `host all` now means apt + net + vps): an audit
+  profile for internet-facing servers. New rules: `host.ssh-hostkeys-template`,
+  `host.sshd-effective` (first value wins across `Include` drop-ins such as
+  `50-cloud-init.conf`, or `--sshd-t` output), `host.kernel-stale`,
+  `host.no-auto-updates`, `host.firewall-off` (ufw, nftables, iptables-persistent),
+  `host.ssh-exposed`, `host.no-bruteforce-protection`, `host.ntp-unsynced`
+  (`--timedatectl`) and `host.git-cve-2026-111760` (`--git-version`, distro backports
+  recognised from `changelog.Debian.gz`). Still read-only; no command is executed.
+- `scan`: `agent.recursive-clone` (recursive submodule clones in agent instructions,
+  scripts, Makefiles and workflows, including `actions/checkout` `submodules: recursive`)
+  and `ci.agent-publish-token` (an AI coding agent in a job that can reach publish
+  secrets or `id-token`/`contents`/`packages: write`).
+- Findings of `host` and `scan` carry a `cwe` list in JSON; `-v` prints it.
+- Docs: agent tool update cooldown (~48 h) guidance; MCP governance gateways
+  (ContextForge, Lunar MCPX, Agent Governance Toolkit, MCP-Defender) in the DESIGN backlog.
+
 ## [0.1.4] — 2026-11-10
 
 ### Added

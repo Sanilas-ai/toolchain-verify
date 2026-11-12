@@ -281,6 +281,35 @@ toolchain-verify host apt --json --strict
 | `net.allow-unused` | info: allow rule with nothing listening |
 | `net.no-firewall`, `net.ufw-inactive`, `net.ufw-default-allow` | warn |
 
+#### Internet-facing server profile (`host vps` / `--profile vps`)
+
+A fresh VPS from a provider image often ships template host keys, password and root
+login enabled by cloud-init, no firewall and no brute-force protection. `host vps` (opt-in;
+`host all` = apt + net + vps) audits that. It still executes nothing: pass command outputs
+for the parts that need root or a daemon.
+
+```bash
+sudo sshd -T > /tmp/sshd-T.txt; timedatectl show > /tmp/tdc.txt; git --version > /tmp/git.txt
+sudo ufw status verbose > /tmp/ufw.txt; sudo nft list ruleset > /tmp/nft.txt   # optional
+toolchain-verify host vps -v --sshd-t /tmp/sshd-T.txt --timedatectl /tmp/tdc.txt \
+  --git-version /tmp/git.txt --ufw-status /tmp/ufw.txt --nft /tmp/nft.txt
+toolchain-verify host --profile vps --json          # files only
+```
+
+| Rule | CWE | Severity | Checks |
+| --- | --- | --- | --- |
+| `host.ssh-hostkeys-template` | CWE-1394, CWE-321; CWE-327 | warn (HIGH): key comment names another host (e.g. `root@fi-fi1-srv-kvm-272`), key older than the first boot (cloud-init `instance-id`, else `/var/log/installer`, else `/etc/machine-id`), no ed25519 key; **fail**: DSA key | fix: `rm /etc/ssh/ssh_host_*; ssh-keygen -A` |
+| `host.sshd-effective` | CWE-309, CWE-307; CWE-250, CWE-284 | **fail**: effective `PasswordAuthentication yes` (also the OpenSSH default when unset) or `PermitRootLogin yes` | `--sshd-t` output, else `sshd_config` with `Include` expanded in place, **first value wins**, `Match` blocks skipped; the message names the winning `file:line` and the ignored later values (e.g. `50-cloud-init.conf` beats `sshd_config`) |
+| `host.kernel-stale` | CWE-1395 | warn | running kernel older than the newest installed `linux-image-*`, `reboot-required`, a pending linux-image security update (with the apt group) |
+| `host.no-auto-updates` | CWE-1395 | warn | `unattended-upgrades` not installed, `20auto-upgrades` missing, `Unattended-Upgrade`/`Update-Package-Lists` not `"1"` |
+| `host.firewall-off` | CWE-284, CWE-1327 | **fail** | no default-deny input policy in ufw, nftables (`--nft` or enabled `/etc/nftables.conf`) or `/etc/iptables/rules.v4` |
+| `host.ssh-exposed` | CWE-1327 | warn (info when ufw allows sshd only from specific sources) | sshd port (from the effective config) on `0.0.0.0`/`[::]` |
+| `host.no-bruteforce-protection` | CWE-307 | warn when sshd is exposed | no fail2ban, sshguard, crowdsec, or `ufw limit` on the ssh port |
+| `host.ntp-unsynced` | CWE-778 | warn | `timedatectl show` `NTPSynchronized=no`/`NTP=no`, or timesyncd without `/run/systemd/timesync/synchronized`, or no NTP client |
+| `host.git-cve-2026-111760` | CWE-197, CWE-59 | warn (HIGH; info when `changelog.Debian.gz` lists the CVE) | git below 2.56.1 / 2.55.1 / 2.54.1 / 2.53.1 / 2.52.1 / 2.51.3 / 2.50.2 ([GHSA-vp2w-7xxj-jvxr](https://github.com/git/git/security/advisories/GHSA-vp2w-7xxj-jvxr): code execution on `clone --recurse-submodules`) |
+
+Findings now carry a `cwe` list in JSON (printed with `-v`).
+
 Configure with `[host]`, `[host.apt]`, `[host.net]` and `[[host.kernel_floor]]` (see
 [examples/host-hp.toml](examples/host-hp.toml)). Build the binary in the sandbox and run
 it on the host: the sandbox cannot see the host's packages, sockets or firewall.
@@ -372,6 +401,19 @@ This finds the following:
 - risky MCP and agent configs, editor auto-run tasks and unsafe GitHub workflows
 - package install hooks
 - known IOCs, such as the strutil-core / pystr-codec campaign
+- `agent.recursive-clone` (warn, CWE-829/CWE-59): `git clone --recurse-submodules` / `--recursive`,
+  `git submodule update --recursive` or `actions/checkout` `submodules: recursive` in agent
+  instructions, rules, scripts, Makefiles and workflows (git CVE-2026-111760)
+- `ci.agent-publish-token` (fail, CWE-269/CWE-522): a workflow job runs an AI coding agent
+  (Codex, Claude Code, Cursor agent, aider, OpenHands, Gemini CLI, goose, opencode) while
+  publish secrets (`NPM_TOKEN`, `NODE_AUTH_TOKEN`, PyPI, cargo, …) or `id-token`/`contents`/`packages: write`
+  are in reach of the same job ([Depi, Backdooring Codex](https://depi.security/blog/20261111-backdooring-codex/))
+
+**Agent tool update cooldown** (`agent.tool-update-cooldown`, guidance): do not auto-update
+coding agents (Codex CLI, Claude Code, Cursor agent, MCP servers) the moment a release drops.
+Pin the version and move to a new release only after about 48 hours, once the release has
+been out long enough for a compromised build to be noticed; never let CI install
+`@latest` of an agent next to publish credentials.
 
 The scan never executes anything from the repository. See DESIGN.md.
 
@@ -565,6 +607,19 @@ sudo ufw status verbose > /tmp/ufw.txt
 toolchain-verify host net -m examples/host-hp.toml --ufw-status /tmp/ufw.txt
 ```
 
+**Профиль для сервера в интернете (`host vps` / `--profile vps`).** Свежий VPS из образа
+провайдера часто приходит с чужими ключами хоста, входом по паролю и под root (через
+cloud-init), без firewall и без защиты от перебора. Проверки: `host.ssh-hostkeys-template`
+(комментарий ключа с чужим hostname, ключ старше первой загрузки, нет ed25519 — warn; DSA —
+fail; исправление: `rm /etc/ssh/ssh_host_*; ssh-keygen -A`), `host.sshd-effective`
+(эффективные `PasswordAuthentication yes` / `PermitRootLogin yes` — fail; по выводу
+`sudo sshd -T` через `--sshd-t` или по `sshd_config` с `Include` и правилом «первое значение
+выигрывает», поэтому `50-cloud-init.conf` перекрывает строку в `sshd_config`),
+`host.kernel-stale`, `host.no-auto-updates`, `host.firewall-off` (fail), `host.ssh-exposed`,
+`host.no-bruteforce-protection`, `host.ntp-unsynced` (`--timedatectl`),
+`host.git-cve-2026-111760` (git < 2.56.1 и других исправленных веток; `--git-version`).
+У каждой находки в JSON есть список `cwe`.
+
 Бинарник собирается в песочнице, а запускается на хосте: из песочницы не видно пакеты,
 сокеты и firewall хоста.
 
@@ -597,7 +652,15 @@ pytest/mvn/gradle — только в песочнице; git, gh и `docker ps/
 - задачи редактора, которые запускаются автоматически;
 - небезопасные GitHub workflows;
 - хуки установки пакетов;
-- известные IOC.
+- известные IOC;
+- `agent.recursive-clone` (warn): `git clone --recurse-submodules`/`--recursive` и
+  `submodule update --recursive` в инструкциях агентов, скриптах и workflow;
+- `ci.agent-publish-token` (fail): ИИ-агент запускается в том же job, где доступны секреты
+  публикации или `id-token`/`contents: write`.
+
+Агентские инструменты (Codex CLI, Claude Code, Cursor agent, MCP-серверы) не стоит обновлять
+сразу после релиза: закрепите версию и переходите на новую примерно через 48 часов
+(`agent.tool-update-cooldown`, рекомендация).
 
 Если какой-то файл не удалось проверить, вердикт будет INCOMPLETE (код 4), а не PASS. Список инструментов MCP (`tools/list`) проверяется командой `toolchain-verify mcp-tools FILE`: она ищет tool poisoning и rug pull (с `--pin`).
 

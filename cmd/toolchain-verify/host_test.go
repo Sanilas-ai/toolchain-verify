@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -197,5 +198,50 @@ func TestPolicyHooks(t *testing.T) {
 	var o, e bytes.Buffer
 	if code := run([]string{"policy", "check", "-m", filepath.Join(t.TempDir(), "none.toml"), "--hook", "claude"}, &o, &e); code != 2 {
 		t.Errorf("missing policy: %d", code)
+	}
+}
+
+func TestHostVpsProfile(t *testing.T) {
+	root := t.TempDir()
+	w := func(p, data string) {
+		full := filepath.Join(root, p)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w("/etc/hostname", "vps-hel-01\n")
+	w("/etc/ssh/ssh_host_ed25519_key.pub", "ssh-ed25519 AAAAsynthetic root@fi-fi1-srv-kvm-272\n")
+	w("/etc/ssh/sshd_config", "Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication no\n")
+	w("/etc/ssh/sshd_config.d/50-cloud-init.conf", "PasswordAuthentication yes\n")
+	w("/proc/sys/kernel/osrelease", "6.8.0-88-generic\n")
+	tdc := filepath.Join(t.TempDir(), "tdc.txt")
+	os.WriteFile(tdc, []byte("NTP=no\nNTPSynchronized=no\n"), 0o644)
+	stdin = strings.NewReader("git version 2.34.1\n")
+	defer func() { stdin = os.Stdin }()
+	var out, errb bytes.Buffer
+	code := run([]string{"host", "--profile", "vps", "--root", root, "--timedatectl", tdc, "--git-version", "-", "-v"}, &out, &errb)
+	s := out.String()
+	if code != 1 {
+		t.Fatalf("code %d\n%s%s", code, s, errb.String())
+	}
+	for _, want := range []string{"vps vps-hel-01, sshd from config (password yes", "host.sshd-effective", "50-cloud-init.conf:1", "host.ssh-hostkeys-template",
+		"root@fi-fi1-srv-kvm-272", "host.firewall-off", "host.ntp-unsynced", "host.git-cve-2026-111760", "cwe: CWE-309, CWE-307", "host.no-auto-updates"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("output lacks %q:\n%s", want, s)
+		}
+	}
+	if regexp.MustCompile(`(FAIL|WARN|INFO)\s+(apt|net|kernel|snap)\.`).MatchString(s) {
+		t.Errorf("vps profile alone must not run apt/net:\n%s", s)
+	}
+	out.Reset()
+	if code := run([]string{"host", "vps", "--root", root, "--json"}, &out, &errb); code != 1 || !strings.Contains(out.String(), `"cwe": [`) || !strings.Contains(out.String(), `"vps": {`) {
+		t.Errorf("json: %d %s", code, out.String())
+	}
+	if code := run([]string{"host", "--profile", "desktop"}, &out, &errb); code != 2 {
+		t.Errorf("bad profile: %d", code)
+	}
+	if code := run([]string{"host", "vps", "--sshd-t", "-", "--git-version", "-"}, &out, &errb); code != 2 {
+		t.Errorf("double stdin: %d", code)
 	}
 }

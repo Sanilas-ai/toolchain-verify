@@ -19,8 +19,19 @@ type Options struct {
 	// Root is prepended to every absolute path read (tests use a fake
 	// tree; default "/").
 	Root string
-	// Apt and Net select the check groups (both when neither is set).
-	Apt, Net bool
+	// Apt and Net select the check groups (both when no group is set).
+	// Vps selects the internet-facing server profile (opt-in).
+	Apt, Net, Vps bool
+	// SshdT is the output of `sudo sshd -T` (optional; sshd_config and its
+	// Include drop-ins are evaluated otherwise).
+	SshdT []byte
+	// Timedatectl is the output of `timedatectl show` (optional).
+	Timedatectl []byte
+	// GitVersion is the output of `git --version` (optional; the dpkg git
+	// package version is used otherwise).
+	GitVersion []byte
+	// Nft is the output of `sudo nft list ruleset` (optional).
+	Nft []byte
 	// UfwStatus is the output of `ufw status [verbose]` (for hosts where
 	// /etc/ufw/user.rules is readable by root only).
 	UfwStatus []byte
@@ -40,6 +51,7 @@ type Report struct {
 	Kernel   *Kernel            `json:"kernel,omitempty"`
 	Apt      *AptState          `json:"apt,omitempty"`
 	Net      *NetState          `json:"net,omitempty"`
+	Vps      *VpsState          `json:"vps,omitempty"`
 	OK       bool               `json:"ok"`
 	Strict   bool               `json:"strict"`
 	Findings []findings.Finding `json:"findings"`
@@ -99,7 +111,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if !opt.Apt && !opt.Net {
+	if !opt.Apt && !opt.Net && !opt.Vps {
 		opt.Apt, opt.Net = true, true
 	}
 	if opt.Now == nil {
@@ -112,14 +124,17 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	c := &findings.Collector{Ignore: p.Ignore}
 	rep := &Report{Strict: opt.Strict || p.Strict}
 	rep.OS, rep.Codename = osRelease(e)
+	dpkg := readDpkgStatus(e)
 	if opt.Apt {
-		dpkg := readDpkgStatus(e)
 		checkApt(e, p.aptPolicy(), rep, dpkg, c)
 		checkKernel(e, p.KernelFloors, rep, dpkg, c)
 		checkSnaps(e, p.aptPolicy(), opt.Groups, c)
 	}
 	if opt.Net {
 		checkNet(e, p.Net, opt, rep, c)
+	}
+	if opt.Vps {
+		checkVps(e, opt, rep, dpkg, c)
 	}
 	rep.Findings = c.Sorted()
 	rep.Ignored = c.Ignored

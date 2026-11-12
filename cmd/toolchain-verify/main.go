@@ -37,7 +37,8 @@ Usage:
                          [--include-tests] [--json] [-v] [-q] [PATH...]
   toolchain-verify docker [-m toolchain.toml] [--socket PATH|off] [--require-engine]
                          [--strict] [--json] [-v] [-q]
-  toolchain-verify host [apt|net] [-m toolchain.toml] [--ufw-status FILE|-] [--ss FILE|-]
+  toolchain-verify host [apt|net|vps|all] [-m toolchain.toml] [--ufw-status FILE|-] [--ss FILE|-]
+  toolchain-verify host vps [--profile vps] [--sshd-t FILE|-] [--timedatectl FILE|-] [--git-version FILE|-] [--nft FILE|-]
                          [--root DIR] [--strict] [--json] [-v] [-q]
   toolchain-verify policy check [-m policy.toml] [--hook claude|cursor] [--in-sandbox|--on-host]
                          [--json] [-q] (-c 'CMD' ... | -- ARGV...)
