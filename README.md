@@ -375,6 +375,26 @@ This finds the following:
 
 The scan never executes anything from the repository. See DESIGN.md.
 
+### Agent isolation & MCP lock (`mcp-lock`)
+
+The `agent` audit also checks that agents run with real isolation:
+`agent.sandbox-approval-matrix` (the Codex `sandbox_mode` × `approval_policy`
+grid), `agent.no-isolation` (sandbox-runtime `~/.srt-settings.json` settings,
+`--dangerously-*` flags, Claude `sandbox:false`), `mcp.no-isolation` (a stdio
+MCP server run as a bare host process) and `mcp.secrets-in-env` (a secret on
+the command line). See [docs/agent-isolation.md](docs/agent-isolation.md) for
+the reference matrix and CWE mapping.
+
+`mcp-lock` is a lock file for MCP servers (mcpd-style): it records each
+server's launch package, exact version and an integrity hash, so a version
+drift or package substitution is caught before the server runs.
+
+```bash
+toolchain-verify mcp-lock --write mcp.lock.json                      # record
+toolchain-verify mcp-lock --lock  mcp.lock.json                      # verify (CI gate)
+toolchain-verify mcp-lock --write mcp.lock.json --tools tools.json   # also pin tool hashes (rug pull)
+```
+
 ### Manifest
 
 ```toml
