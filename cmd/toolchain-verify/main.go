@@ -51,6 +51,8 @@ Usage:
                          [--max-file-size N] [--max-files N] [--max-depth N]
                          [--timeout D] [--include-deps] [--strict-coverage] [-v] [-q] DIR
   toolchain-verify mcp-tools [--pin FILE] [--write-pin FILE] [--json|--sarif] [--strict] TOOLS.json|-
+  toolchain-verify mcp-lock  (--write FILE | --lock FILE) [--tools TOOLS.json] [-m manifest]
+                         [--trusted DIR]... [--json] [--strict]
   toolchain-verify toolcall parse|bench|grounded|profiles|stops ...
   toolchain-verify pin   [-m toolchain.toml] [--root DIR] [--version exact|tilde|caret|min|keep]
                          [--no-sha256] [--path] [--tool NAME]... [--dry-run] [--ignore-container]
@@ -146,6 +148,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdScan(args[1:], stdout, stderr)
 	case "mcp-tools":
 		return cmdMCPTools(args[1:], stdin, stdout, stderr)
+	case "mcp-lock":
+		return cmdMCPLock(args[1:], stdout, stderr)
 	case "toolcall":
 		return cmdToolcall(args[1:], stdin, stdout, stderr)
 	case "version", "--version":

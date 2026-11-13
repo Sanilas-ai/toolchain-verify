@@ -396,3 +396,39 @@ manifest. Still open for `pin`: pinning `version_regex`/`version_args` for new t
 
 Next: env-var checks
 (`GOFLAGS`, `NODE_OPTIONS`); signed manifests; GitHub Action wrapper; archive (zip) scanning in Downloads; extension audit.
+
+## Backlog: agent-trace analysis (design only, not implemented)
+
+These need an agent *trace* (a recorded sequence of tool calls and results)
+or model internals, which this tool does not yet ingest. They are recorded
+here as deliberate future work, not shipped rules.
+
+- **Invariant-style "source → sink" toxic-flow rules over traces**
+  (ref [invariantlabs-ai/invariant](https://github.com/invariantlabs-ai/invariant)).
+  Today `mcp.toxic-flow` reasons statically about the *capability set* of a
+  tool list (untrusted-source + private-data + outbound-sink coexist). The
+  backlog item is a rule language over an actual trace that fires only when a
+  concrete flow occurs: data returned by an untrusted-source tool call (web
+  fetch, read issue/email) reaches the arguments of an outbound-sink call
+  (send/post/create-comment) in the same session. This removes false
+  positives from capability-only analysis and catches the real exfiltration
+  path. Needs a trace ingest format (OpenTelemetry-style spans, or a
+  provider transcript) and a taint model over tool arguments/results.
+
+- **TaskTracker-style activation probes for task drift on local models**
+  (ref [microsoft/TaskTracker](https://github.com/microsoft/TaskTracker)).
+  Linear probes on an LLM's hidden activations detect when the model's task
+  has "drifted" after reading external data, without analysing the text.
+  Research item for the local tool-call models (`toolcall`): run a probe on
+  the base model's activations between reading an untrusted tool result and
+  the next tool call, and flag drift. Needs access to model activations
+  (llama.cpp hooks) and a trained probe; English-only probes to start.
+
+- **NeMo Guardrails policy-architecture comparison**
+  (ref [NVIDIA-NeMo/Guardrails](https://github.com/NVIDIA-NeMo/Guardrails)).
+  NeMo's Colang programmable rails (input/output/dialog/tool-call checks) are
+  a mature policy architecture. Backlog item: compare our deterministic
+  rule/severity model (`internal/findings`, `internal/execpolicy`) against
+  Colang rails and document which guarantees each gives, to decide whether a
+  programmable-policy layer is worth adding on top of the deterministic
+  verifier.

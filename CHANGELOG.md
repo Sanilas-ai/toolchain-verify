@@ -7,6 +7,20 @@ this project uses [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Agent sandbox-isolation rules (`agent`): `agent.sandbox-approval-matrix`
+  models the Codex `sandbox_mode` × `approval_policy` grid (danger-full-access
+  + never = critical fail); `agent.no-isolation` flags Anthropic
+  sandbox-runtime (`~/.srt-settings.json`) settings that weaken filesystem /
+  network isolation, `--dangerously-*` bypass flags and Claude `sandbox:false`.
+- MCP server isolation/secret rules: `mcp.no-isolation` warns on a stdio MCP
+  server launched as a bare host process (no container / srt);
+  `mcp.secrets-in-env` fails on a literal secret passed on the command line
+  (world-visible via `ps`).
+- `mcp-lock` subcommand: a lock file for MCP servers recording launch package,
+  exact version and a sha256 integrity hash per server (mcpd-style). Verify
+  catches version drift / package substitution (`mcp.lock`), unpinned
+  `pkg@latest` (`mcp.lock-unpinned`) and new/removed servers; `--tools` folds
+  tool-definition hashes to also flag rug-pulls.
 - `host vps` (also `--profile vps`; `host all` now means apt + net + vps): an audit
   profile for internet-facing servers. New rules: `host.ssh-hostkeys-template`,
   `host.sshd-effective` (first value wins across `Include` drop-ins such as
@@ -20,7 +34,10 @@ this project uses [SemVer](https://semver.org/).
   and `ci.agent-publish-token` (an AI coding agent in a job that can reach publish
   secrets or `id-token`/`contents`/`packages: write`).
 - Findings of `host` and `scan` carry a `cwe` list in JSON; `-v` prints it.
-- Docs: agent tool update cooldown (~48 h) guidance; MCP governance gateways
+- Docs: `docs/agent-isolation.md` (rules + Codex sandbox×approval reference
+  matrix + CWE mapping); agent-trace analysis backlog in `DESIGN.md`
+  (Invariant source→sink, TaskTracker probes, NeMo Guardrails comparison);
+  agent tool update cooldown (~48 h) guidance; MCP governance gateways
   (ContextForge, Lunar MCPX, Agent Governance Toolkit, MCP-Defender) in the DESIGN backlog.
 
 ## [0.1.4] — 2026-11-10
