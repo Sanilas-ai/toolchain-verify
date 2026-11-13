@@ -49,6 +49,7 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 			}
 		}
 	}
+	s.checkAgentPublishJobs(rel, doc)
 	wf.privileged = wf.on["pull_request_target"] || wf.on["workflow_run"] || wf.on["issue_comment"] || wf.on["issues"] || wf.on["discussion"] || wf.on["discussion_comment"] || wf.on["pull_request_review_comment"]
 	if p := ymap(doc, "permissions"); p != nil && p.Kind == yaml.ScalarNode && p.Value == "write-all" {
 		s.add(Finding{Rule: "gha.write-all", Severity: SevWarn, Path: rel, Line: p.Line, Message: "workflow grants permissions: write-all to GITHUB_TOKEN"})
@@ -88,6 +89,7 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 			if c := ymap(st, "if"); c != nil && sameRepoGuardRe.MatchString(c.Value) {
 				sameRepo = true
 			}
+			s.checkoutSubmodules(rel, st)
 			if u := ymap(st, "uses"); u != nil {
 				s.checkUses(rel, u)
 				if strings.HasPrefix(strings.ToLower(u.Value), "actions/checkout@") {

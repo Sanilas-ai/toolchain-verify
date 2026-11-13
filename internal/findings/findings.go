@@ -25,6 +25,7 @@ type Finding struct {
 	Message  string   `json:"message"`
 	Fix      string   `json:"fix,omitempty"`
 	Refs     []string `json:"refs,omitempty"`
+	CWE      []string `json:"cwe,omitempty"`
 }
 
 // Location is Path[:Line].

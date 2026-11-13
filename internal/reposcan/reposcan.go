@@ -96,6 +96,7 @@ type Finding struct {
 	Signals  []string `json:"signals,omitempty"`
 	Fix      string   `json:"fix,omitempty"`
 	Refs     []string `json:"refs,omitempty"`
+	CWE      []string `json:"cwe,omitempty"`
 }
 
 // ControlFile is one entry of the control-file inventory.
@@ -427,6 +428,9 @@ func (s *scanner) file(p, rel string) {
 		}
 	}
 	s.scanText(rel, kind, b)
+	if kind != "" || isScriptName(rel) || isShellName(base) {
+		s.scanRecursiveClone(rel, b)
+	}
 	switch kind {
 	case KindMCP, KindAgentConfig, KindEditorTasks, KindEditorConfig:
 		if strings.HasSuffix(strings.ToLower(base), ".yml") {
@@ -515,4 +519,13 @@ func (s *scanner) finish() {
 	if s.rep.Findings == nil {
 		s.rep.Findings = []Finding{}
 	}
+}
+
+// isShellName matches build/automation files without a script extension.
+func isShellName(base string) bool {
+	switch strings.ToLower(base) {
+	case "makefile", "gnumakefile", "dockerfile", "containerfile", "justfile", "taskfile", ".envrc":
+		return true
+	}
+	return false
 }

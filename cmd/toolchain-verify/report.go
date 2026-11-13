@@ -55,6 +55,9 @@ func printFindings(w io.Writer, fs []findings.Finding, verbose bool) {
 		}
 		fmt.Fprintf(w, "  %-4s  %-22s %s\n", strings.ToUpper(f.Severity), f.Rule, orDash(f.Location()))
 		fmt.Fprintf(w, "        %s\n", f.Message)
+		if len(f.CWE) > 0 && verbose {
+			fmt.Fprintf(w, "        cwe: %s\n", strings.Join(f.CWE, ", "))
+		}
 		if f.Fix != "" && (verbose || f.Severity == findings.SevFail) {
 			fmt.Fprintf(w, "        fix: %s\n", f.Fix)
 		}

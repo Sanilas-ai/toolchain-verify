@@ -161,6 +161,10 @@ behind security fixes and which listening services the firewall does not account
 | Service bound to 0.0.0.0 that only needs localhost (one firewall change or a Docker port rule away from exposure) | `net.unneeded-bind` |
 | Service reachable from anywhere | `net.exposed`, `net.public-listener`, `net.no-firewall`, `net.ufw-inactive`, `net.ufw-default-allow` |
 | Stale firewall holes | `net.allow-unused` |
+| Provider image template: shared SSH host keys (MITM across all VMs of the image), DSA | `host.ssh-hostkeys-template` (`host vps`) |
+| Password / root SSH login left on by cloud-init drop-ins | `host.sshd-effective` (first value wins across `Include`) |
+| Internet-facing server without firewall, brute-force protection, auto-updates, time sync | `host.firewall-off`, `host.ssh-exposed`, `host.no-bruteforce-protection`, `host.no-auto-updates`, `host.kernel-stale`, `host.ntp-unsynced` |
+| git CVE-2026-111760 (code execution on recursive clone) | `host.git-cve-2026-111760` |
 
 Kernel floors live in the manifest rather than the code: CVE fixes land per series and per
 flavour (GA 5.15 vs. HWE 6.8), and new KEV entries appear faster than releases. A floor
@@ -174,6 +178,11 @@ visible.
   capped and silently skips other users' processes.
 - `--root DIR` reads a copied tree (and is how the tests run with fakes).
 - Output never includes file contents beyond package names/versions and socket endpoints.
+- `host vps` keeps the same rule: it does not run `sshd -T`, `timedatectl`, `git` or `nft`;
+  their outputs are optional inputs (`--sshd-t`, `--timedatectl`, `--git-version`, `--nft`).
+  Without them it evaluates `sshd_config` + `Include` drop-ins itself (first value wins,
+  `Match` blocks are not applied globally; a `Match` in an included file ends with that file),
+  and reads `/run/systemd/timesync/synchronized` and the dpkg git version.
 
 ### Limits
 
@@ -293,6 +302,8 @@ workflows, package hooks and skill scripts. Each file is treated as untrusted da
 | Agent settings: auto-approve / YOLO, endpoint override, hooks, broad permissions | `agent.*` |
 | Editor auto-run (`folderOpen` tasks, disabled workspace trust) | `editor.*` |
 | CI: unpinned actions/images, pwn-request, script injection, `write-all` | `gha.*` |
+| CI: AI coding agent in the same job as publish secrets or write/OIDC tokens (prompt injection → release backdoor, Depi on Codex, 2026-11-11) | `ci.agent-publish-token` |
+| Recursive submodule clones in agent instructions, scripts, workflows (git CVE-2026-111760) | `agent.recursive-clone` |
 | Package lifecycle hooks (npm/gem/setup.py/binding.gyp/.pth) that download, decode, exec or exfiltrate | `pkg.*` |
 | Skill scripts | `skill.*` |
 | Known campaigns (versioned IOC DB `iocs.toml`, every entry with an https source) | `ioc.*` |
@@ -329,6 +340,24 @@ workflows, package hooks and skill scripts. Each file is treated as untrusted da
 - Socket research: the IOC DB.
 
 ### Backlog (P1+)
+- `agent.tool-update-cooldown` as a check: read agent tool pins (manifest, `package.json`,
+  `.tool-versions`, CI `npm i -g …@latest`) and warn when a version is younger than ~48 h
+  or unpinned (`@latest`) next to credentials. Needs registry publish times, so it stays
+  opt-in/online. Today it is guidance in the README.
+- MCP governance gateways, as integration targets and for a detector "MCP without a
+  gateway" (agent configs that talk to MCP servers directly instead of through a policy
+  proxy). Ideas from Дамагер, links only, nothing cloned or run:
+  - [IBM ContextForge](https://github.com/IBM/mcp-context-forge): MCP gateway/registry that
+    federates MCP and REST tools behind one endpoint with auth, rate limits and observability.
+  - [Lunar MCPX](https://github.com/TheLunarCompany/lunar): MCP aggregator/gateway with
+    per-tool access control, audit and traffic policies.
+  - [Microsoft Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit):
+    policy enforcement, identity and audit for agent actions and tool calls.
+  - [MCP-Defender](https://github.com/MCP-Defender/MCP-Defender): desktop proxy that
+    inspects MCP traffic of AI clients and blocks malicious tool calls.
+  Detector idea: an `mcp.json` server that is not routed through a configured gateway URL
+  (manifest `[agent] mcp_gateway = "..."`) is reported, and `mcp-tools` could pin the
+  gateway's `tools/list` instead of each server's.
 - Data-driven rule packs (YAML signatures, optional YARA via an external binary in the sandbox).
 - Dynamic MCP probe: start a server inside the oss-run sandbox with no network or credentials, call `tools/list` and pipe the result into `mcp-tools`.
 - OCR for instruction images, and scanning inside archives (zip/tar, bounded).
