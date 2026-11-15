@@ -32,6 +32,9 @@ type Options struct {
 	GitVersion []byte
 	// Nft is the output of `sudo nft list ruleset` (optional).
 	Nft []byte
+	// ListenAllowed, when non-nil, overrides [host.listen] allowed
+	// (from --listen-policy).
+	ListenAllowed []string
 	// UfwStatus is the output of `ufw status [verbose]` (for hosts where
 	// /etc/ufw/user.rules is readable by root only).
 	UfwStatus []byte
@@ -134,7 +137,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 		checkNet(e, p.Net, opt, rep, c)
 	}
 	if opt.Vps {
-		checkVps(e, opt, rep, dpkg, c)
+		checkVps(e, opt, p, rep, dpkg, c)
 	}
 	rep.Findings = c.Sorted()
 	rep.Ignored = c.Ignored

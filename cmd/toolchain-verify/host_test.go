@@ -245,3 +245,24 @@ func TestHostVpsProfile(t *testing.T) {
 		t.Errorf("double stdin: %d", code)
 	}
 }
+
+func TestHostListenPolicyFlag(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "proc/net"), 0o755)
+	os.WriteFile(filepath.Join(root, "proc/net/tcp"), []byte("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"+
+		"   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1 1 0 100 0 0 10 0\n"+
+		"   1: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 2 1 0 100 0 0 10 0\n"), 0o644)
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "listen.toml")
+	os.WriteFile(pol, []byte("[host.listen]\nallowed = [\"22/tcp\"]\n"), 0o644)
+	var out, errb bytes.Buffer
+	run([]string{"host", "vps", "--root", root, "--listen-policy", pol}, &out, &errb)
+	if s := out.String(); !strings.Contains(s, "host.listeners-policy") || !strings.Contains(s, "0.0.0.0:8080/tcp") || strings.Contains(s, "0.0.0.0:22/tcp not") {
+		t.Errorf("policy flag:\n%s%s", s, errb.String())
+	}
+	bad := filepath.Join(dir, "bad.toml")
+	os.WriteFile(bad, []byte("allowed = [\"22/icmp\"]\n"), 0o644)
+	if code := run([]string{"host", "vps", "--root", root, "--listen-policy", bad}, &out, &errb); code != 2 {
+		t.Errorf("bad policy: %d", code)
+	}
+}
