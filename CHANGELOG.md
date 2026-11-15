@@ -7,6 +7,21 @@ this project uses [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Threat-intel rules, November 2026 ([docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md)):
+  - `host apps` (opt-in group, also in `host all`): `host.vscode-cve-2026-120779` (VS Code
+    < 1.145.3), `host.llama-server-stale` (llama.cpp < b12340 via `--llama-version`),
+    `host.ide-extension-denylist` (built-in: trojanized `anthropic.claude-code` 2.1.312 and
+    2.1.313; extend with `[host.apps] extension_denylist`), `host.ssh-ioc-key`.
+  - `host --authorized-keys-baseline FILE`: `host.authorized-keys-baseline` fails every
+    authorized key that is not in the baseline. Keys are never printed.
+  - `agent`: GPUStack advisories (CVE-2026-102895 in KEV, CVE-2026-102894); every
+    version below 2.2.2 fails as critical. `mcp.remote-no-auth` warns on a remote MCP
+    server with no client authentication (BluePhishing).
+  - `scan`: `gha.secrets-dump` (`toJSON(secrets)`), `gha.log-tamper` (deleting runs or
+    logs), `gha.secret-echo`, `gha.unpinned-npx` (wfx-loot, npm hijack) and
+    `ci.agent-untrusted-prompt` (AI agent on issue/comment/fork-PR triggers).
+  - `models`: `require_allow = true` makes a reviewed SHA-256 manifest mandatory
+    (`models.not-allowlisted`).
 - Agent sandbox-isolation rules (`agent`): `agent.sandbox-approval-matrix`
   models the Codex `sandbox_mode` × `approval_policy` grid (danger-full-access
   + never = critical fail); `agent.no-isolation` flags Anthropic

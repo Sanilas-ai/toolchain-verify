@@ -422,7 +422,7 @@ func process(j job, pol *Policy, hashAll, verify bool) result {
 	} else if dst, err := os.Stat(filepath.Dir(j.path)); err == nil && dst.Mode().Perm()&0o002 != 0 && dst.Mode()&os.ModeSticky == 0 {
 		r.writable = true
 	}
-	doHash := (j.source == "path" && hashAll) || (j.source == "ollama" && verify) || needHash(pol, j.path) || (j.source == "path" && j.expect != "")
+	doHash := (j.source == "path" && (hashAll || pol.RequireAllow)) || (j.source == "ollama" && verify) || needHash(pol, j.path) || (j.source == "path" && j.expect != "")
 	if doHash {
 		h, err := hashFile(j.path)
 		if err != nil {
@@ -492,6 +492,11 @@ func judge(c *findings.Collector, pol *Policy, r *result) {
 		if a.SHA256 == al.SHA256 && (al.Path == "" || matchGlob(al.Path, a.Path)) {
 			a.Allowed = or(al.Note, "allowlisted")
 		}
+	}
+	if pol.RequireAllow && a.Source == "path" && a.Allowed == "" && a.Format != "" {
+		c.Add(findings.Finding{Rule: "models.not-allowlisted", Severity: findings.SevFail, Path: a.Path,
+			Message: fmt.Sprintf("models.require_allow is set and SHA-256 %s is not in the reviewed hash manifest (models.allow); a backdoored fine-tune (poisoned post-training data) is indistinguishable by format checks", short(a.SHA256)),
+			Fix:     "verify the file against the publisher's published digest, then add [[models.allow]] sha256 = \"...\" with a note on its source"})
 	}
 	if len(fa.malformed) > 0 {
 		rule := rulePrefix + "malformed"

@@ -21,6 +21,8 @@ type Policy struct {
 	KernelFloors []KernelFloor `toml:"kernel_floor"`
 	// Listen is the externally reachable listener allowlist ([host.listen]).
 	Listen *ListenPolicy `toml:"listen"`
+	// Apps configures the apps group ([host.apps]).
+	Apps *AppsPolicy `toml:"apps"`
 	// Ignore suppresses findings: "rule" or "rule:path-glob".
 	Ignore []string `toml:"ignore"`
 	// Strict makes warnings fail the run.
@@ -165,6 +167,13 @@ func (p *Policy) Validate() error {
 		}
 		if f.Severity != "" && f.Severity != "fail" && f.Severity != "warn" {
 			return fmt.Errorf("%s: severity must be \"fail\" or \"warn\"", where)
+		}
+	}
+	if p.Apps != nil {
+		for _, s := range p.Apps.ExtensionDenylist {
+			if _, _, err := ParseExtensionSpec(s); err != nil {
+				return fmt.Errorf("host.apps: %w", err)
+			}
 		}
 	}
 	if p.Listen != nil {
