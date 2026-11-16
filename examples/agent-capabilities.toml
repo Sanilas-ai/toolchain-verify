@@ -1,0 +1,50 @@
+# Agent capability manifest for the `scan` agent write rules
+# (docs/design/agent-write-rules.md). Put it next to the agent's code as
+# agent-capabilities.toml (or .json). This example passes all three rules.
+schema = 1
+agent = "mail-assistant"
+
+# agent.write-policy-code-derived: the allow/deny table for write tools is
+# built by code from the tool schemas. "model", "llm" or "prompt" fail.
+[write_policy]
+source = "schema"
+
+# agent.write-plan-frozen-pre-untrusted: the set of write actions is fixed
+# before the first tool output / untrusted content is read.
+[write_plan]
+frozen_before_untrusted_read = true
+expand_after_untrusted = false
+
+# Read-only tools need no further declaration.
+[[tool]]
+name = "read_inbox"
+
+# agent.write-args-from-user: every sensitive argument (role recipient,
+# content, amount or destination, or sensitive = true) comes from the user
+# request (source = "user"; "constant" and "schema" are also accepted) or is
+# behind a human confirmation (human_confirm on the argument or the tool).
+[[tool]]
+name = "send_email"
+write = true
+  [[tool.arg]]
+  name = "to"
+  role = "recipient"
+  source = "user"
+  [[tool.arg]]
+  name = "body"
+  role = "content"
+  source = "tool_output"
+  human_confirm = true
+
+[[tool]]
+name = "transfer"
+write = true
+human_confirm = true
+  [[tool.arg]]
+  name = "amount"
+  role = "amount"
+  source = "user"
+  [[tool.arg]]
+  name = "iban"
+  role = "destination"
+  source = "user"

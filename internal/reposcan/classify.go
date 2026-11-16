@@ -29,6 +29,9 @@ func classify(rel string) string {
 	parent := path.Base(dir)
 	under := func(seg string) bool { return strings.HasPrefix(l, seg+"/") || strings.Contains(l, "/"+seg+"/") }
 
+	if isAgentCapsName(base) {
+		return KindAgentCaps
+	}
 	switch base {
 	case "agents.md", "agent.md", "claude.md", "claude.local.md", "gemini.md", ".cursorrules", ".windsurfrules",
 		".clinerules", ".roorules", "copilot-instructions.md", "skill.md", "conventions.md", ".goosehints", "qwen.md", "crush.md":
