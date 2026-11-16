@@ -91,6 +91,8 @@ type resolved struct {
 	requireCont     *bool
 	allowCwd        bool
 	banUnfixed      bool
+	mcpDeny         map[string]mcpDenied // normPkg name -> reason
+	mcpReviewed     map[string]bool      // exact specs, nil = not enforced
 	hostInventory   bool
 	dockerSocket    string
 	snapRoot        string
@@ -188,6 +190,16 @@ func resolve(p *Policy, opt Options) (*resolved, error) {
 	r.supplyChain = boolOr(p.SupplyChain, true)
 	r.allowCwd = opt.AllowUntrustedCwd
 	r.banUnfixed = boolOr(p.BanUnfixed, false)
+	r.mcpDeny = map[string]mcpDenied{}
+	for _, n := range p.MCPDenylist {
+		r.mcpDeny[mcpDenyKey(n)] = mcpDenied{reason: "listed in policy mcp_denylist"}
+	}
+	if len(p.MCPReviewed) > 0 {
+		r.mcpReviewed = map[string]bool{}
+		for _, s := range p.MCPReviewed {
+			r.mcpReviewed[strings.ToLower(strings.TrimSpace(s))] = true
+		}
+	}
 	r.hostInventory = boolOr(p.HostInventory, true) && !opt.NoHostInventory
 	r.dockerSocket = opt.DockerSocket
 	if r.dockerSocket == "" && p.DockerSocket != "" {
@@ -335,6 +347,14 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	db, err := LoadDB(builtin, extra)
 	if err != nil {
 		return nil, err
+	}
+	if r.mcpDeny == nil {
+		r.mcpDeny = map[string]mcpDenied{}
+	}
+	for _, b := range db.Blocklist {
+		if _, ok := r.mcpDeny[mcpDenyKey(b.Name)]; !ok {
+			r.mcpDeny[mcpDenyKey(b.Name)] = mcpDenied{reason: b.Reason, refs: b.Refs}
+		}
 	}
 	c := &collector{}
 	if p != nil {

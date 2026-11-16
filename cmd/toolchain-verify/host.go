@@ -34,7 +34,9 @@ func readInput(p string, stdin io.Reader) ([]byte, error) {
 
 func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var groups []string
-	isGroup := func(a string) bool { return a == "apt" || a == "net" || a == "vps" || a == "apps" || a == "all" }
+	isGroup := func(a string) bool {
+		return a == "apt" || a == "net" || a == "vps" || a == "apps" || a == "secrets" || a == "all"
+	}
 	for len(args) > 0 && isGroup(args[0]) {
 		groups = append(groups, args[0])
 		args = args[1:]
@@ -54,6 +56,10 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	listenPolicy := fs.String("listen-policy", "", "vps: TOML file with `allowed = [\"22/tcp\", ...]` (or a [host.listen] section): ports that may listen outside loopback")
 	vscodeVersion := fs.String("vscode-version", "", "apps: file with `code --version` output (\"-\" = stdin); default: VS Code package.json files")
 	llamaVersion := fs.String("llama-version", "", "apps: file with `llama-server --version` output (\"-\" = stdin)")
+	chromeVersion := fs.String("chrome-version", "", "apps: file with `google-chrome --version` output (\"-\" = stdin); default: dpkg / snap Chrome and Chromium")
+	phpVersion := fs.String("php-version", "", "apps: file with `php -v` output (\"-\" = stdin); default: dpkg php packages")
+	pathEnv := fs.String("path", "", "apps: PATH value to check (default: $PATH when --root is /)")
+	sandboxHost := fs.Bool("sandbox-host", false, "secrets: this is a sandbox/swarm host; exchange and wallet keys fail (same as host.secrets.forbid_exchange_keys)")
 	keysBaseline := fs.String("authorized-keys-baseline", "", "authorized_keys-format file of the expected keys; any other authorized key fails (keys are never printed)")
 	strict := fs.Bool("strict", false, "warnings fail the run")
 	asJSON := fs.Bool("json", false, "print a JSON report")
@@ -65,7 +71,7 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	for _, a := range fs.Args() {
 		if !isGroup(a) {
-			fmt.Fprintf(stderr, "error: unknown check group %q (want apt, net, vps, apps or all)\n", a)
+			fmt.Fprintf(stderr, "error: unknown check group %q (want apt, net, vps, apps, secrets or all)\n", a)
 			return 2
 		}
 		groups = append(groups, a)
@@ -79,13 +85,13 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	stdinUsers := 0
-	for _, v := range []string{*ufwStatus, *ss, *sshdT, *timedatectl, *gitVersion, *nft, *vscodeVersion, *llamaVersion, *keysBaseline} {
+	for _, v := range []string{*ufwStatus, *ss, *sshdT, *timedatectl, *gitVersion, *nft, *vscodeVersion, *llamaVersion, *chromeVersion, *phpVersion, *keysBaseline} {
 		if v == "-" {
 			stdinUsers++
 		}
 	}
 	if stdinUsers > 1 {
-		fmt.Fprintln(stderr, "error: only one of --ufw-status, --ss, --sshd-t, --timedatectl, --git-version, --nft, --vscode-version, --llama-version and --authorized-keys-baseline can read stdin")
+		fmt.Fprintln(stderr, "error: only one of --ufw-status, --ss, --sshd-t, --timedatectl, --git-version, --nft, --vscode-version, --llama-version, --chrome-version, --php-version and --authorized-keys-baseline can read stdin")
 		return 2
 	}
 	cwd, home := cwdHome()
@@ -105,6 +111,8 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			opt.Vps = true
 		case "apps":
 			opt.Apps = true
+		case "secrets":
+			opt.Secrets = true
 		case "all":
 			opt.Apt, opt.Net, opt.Vps, opt.Apps = true, true, true, true
 		}
@@ -120,7 +128,7 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	for _, in := range []struct {
 		name string
 		dst  *[]byte
-	}{{*sshdT, &opt.SshdT}, {*timedatectl, &opt.Timedatectl}, {*gitVersion, &opt.GitVersion}, {*nft, &opt.Nft}, {*vscodeVersion, &opt.VSCodeVersion}, {*llamaVersion, &opt.LlamaVersion}, {*keysBaseline, &opt.KeysBaseline}} {
+	}{{*sshdT, &opt.SshdT}, {*timedatectl, &opt.Timedatectl}, {*gitVersion, &opt.GitVersion}, {*nft, &opt.Nft}, {*vscodeVersion, &opt.VSCodeVersion}, {*llamaVersion, &opt.LlamaVersion}, {*chromeVersion, &opt.ChromeVersion}, {*phpVersion, &opt.PHPVersion}, {*keysBaseline, &opt.KeysBaseline}} {
 		if *in.dst, err = readInput(in.name, stdin); err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 2
@@ -129,6 +137,22 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var pol *hostsec.Policy
 	if m != nil {
 		pol = m.Host
+	}
+	opt.PathEnv = *pathEnv
+	if opt.PathEnv == "" && (*root == "/" || *root == "") {
+		opt.PathEnv = os.Getenv("PATH")
+	}
+	if opt.Secrets && (*root == "/" || *root == "") {
+		opt.Environ = os.Environ() // only names are ever reported
+	}
+	if *sandboxHost {
+		if pol == nil {
+			pol = &hostsec.Policy{}
+		}
+		if pol.Secrets == nil {
+			pol.Secrets = &hostsec.SecretsPolicy{}
+		}
+		pol.Secrets.ForbidExchangeKeys = true
 	}
 	if *listenPolicy != "" {
 		if opt.ListenAllowed, err = loadListenPolicy(*listenPolicy); err != nil {

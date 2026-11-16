@@ -370,6 +370,17 @@ func auditServer(r *resolved, c *collector, path string, s mcpServer) []ExecSurf
 		} else if shells[cmd] && containsAny(args, "-c", "/c", "-Command", "-command") {
 			c.add(Finding{Rule: "mcp.shell", Severity: SevWarn, Path: path, Message: id + ": server is started through a shell -c string; prefer an explicit binary and args"})
 		}
+		if pkg, _ := runnerPackage(cmd, args); pkg != "" {
+			if d, ok := r.mcpDeny[mcpDenyKey(pkg)]; ok {
+				c.add(Finding{Rule: "mcp.blocklisted-package", Severity: SevFail, Path: path,
+					Message: fmt.Sprintf("%s: %s launches %q, a known fake/malicious MCP package (%s)", id, cmd, pkgName(pkg), d.reason),
+					Fix:     "remove this server, uninstall the package, rotate every credential the agent session could read", Refs: d.refs})
+			} else if r.mcpReviewed != nil && !r.mcpReviewed[strings.ToLower(pkg)] {
+				c.add(Finding{Rule: "mcp.not-reviewed", Severity: SevWarn, Path: path,
+					Message: fmt.Sprintf("%s: %s launches %q, which is not on the policy mcp_reviewed list (exact reviewed version from the first-party source)", id, cmd, pkg),
+					Fix:     "review the package source and publisher, pin the exact version and add the spec to mcp_reviewed"})
+			}
+		}
 		if pkg, pinned := runnerPackage(cmd, args); pkg != "" && !pinned {
 			c.add(Finding{Rule: "mcp.unpinned", Severity: SevWarn, Path: path,
 				Message: fmt.Sprintf("%s: %s fetches %q without a pinned version at every start; a compromised or typo-squatted release runs with your privileges", id, cmd, pkg),
@@ -615,4 +626,29 @@ func hasAuthHeader(h map[string]string) bool {
 		}
 	}
 	return false
+}
+
+type mcpDenied struct {
+	reason string
+	refs   []string
+}
+
+// pkgName strips a version / extras from a runner package spec:
+// "@scope/pkg@1.2.3" -> "@scope/pkg", "pkg==1.0" -> "pkg", "pkg[cli]" -> "pkg".
+func pkgName(spec string) string {
+	s := spec
+	if i := strings.IndexAny(s, "=<>!~;["); i > 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, "@"); i > 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
+// mcpDenyKey normalises a package name for denylist lookups across npm and
+// PyPI (case-insensitive, PyPI "_" and "." equal "-").
+func mcpDenyKey(spec string) string {
+	n := strings.ToLower(pkgName(spec))
+	return strings.NewReplacer("_", "-", ".", "-").Replace(n)
 }

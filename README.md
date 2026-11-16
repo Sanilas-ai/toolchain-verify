@@ -142,6 +142,10 @@ and Docker/Podman images and containers via `GET` requests on the local engine s
 `ALLOW_BUILTIN_DEP`) are kept from unit/container environments, so a Flowise container started
 with `ALLOW_BUILTIN_DEP=true` fails on CVE-2026-119978. `ban_unfixed = true` makes every
 advisory without a fixed release fail ("ban until fix").
+MCP launch commands (`npx`/`uvx`/`pipx run`/`uv tool run`) are matched against the blocklist
+(built-in fake MCP packages such as `karma365-mcp` and `dynamic-mcp`) plus `mcp_denylist`
+(`mcp.blocklisted-package`, fail). `mcp_reviewed = ["@scope/pkg@1.2.3", "pkg==1.2.3"]`
+reports every other launched spec (`mcp.not-reviewed`, warn).
 
 | Exit | `agent` meaning |
 |---|---|
@@ -319,8 +323,25 @@ fresh VPS, including a note on vanilla WireGuard behind DPI:
 `llama-server` < b12340 (`--llama-version`), denylisted IDE extensions (trojanized
 `anthropic.claude-code` 2.1.312/2.1.313 and `[host.apps] extension_denylist`), the
 `svc-telemetry` IoC key, and with `--authorized-keys-baseline FILE` any authorized key that
-is not in the baseline. Details and the wfx-loot runbook:
+is not in the baseline. Also in `host apps`: Chrome/Chromium < 157.0.8103.50
+(`host.chrome-cve-2026-125350`, KEV; dpkg/snap or `--chrome-version`), PHP below
+8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 or EOL (`host.php-cve-2026-109618`; distro backports
+listed in `changelog.Debian.gz` are info), a user-writable `$PATH` entry ahead of the system
+directories (`host.path-user-writable`, `host.path-shadow`; fail when it shadows `sudo`,
+`su`, `ssh` and similar), a tampered pyenv/rbenv/nodenv dispatcher or shim or a re-pointed
+Homebrew link (`host.version-manager-tamper`), and IDE extension auto-update left on
+(`host.ide-extension-autoupdate`). Details and the wfx-loot runbook:
 [docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md).
+
+**Secrets finder (`host secrets`, on demand, never part of `host all`).** It reads well-known
+token locations (`~/.cache/huggingface/token`, `~/.git-credentials`, `.env*` up to two levels
+below each home, `~/.config/**` without browser profiles and caches, `[host.secrets]
+extra_paths`) and the environment's variable names. It reports `file:line`, the credential
+kind (Hugging Face, GitHub, OpenAI, Anthropic, Google AI, xAI, Groq, npm, PyPI, exchange API
+key, wallet seed/key, git credential) and a redacted form that keeps only the public prefix
+(`hf_…[37 chars]`). Values are never printed. `host.secret-file` warns. On a host marked
+sandbox/swarm (`[host.secrets] forbid_exchange_keys = true` or `--sandbox-host`), an exchange
+or wallet key fails as `host.exchange-key-forbidden`.
 
 Configure with `[host]`, `[host.apt]`, `[host.net]` and `[[host.kernel_floor]]` (see
 [examples/host-hp.toml](examples/host-hp.toml)). Build the binary in the sandbox and run
@@ -592,6 +613,10 @@ toolchain-verify agent --quarantine                # убрать подброш
   `npm -g`, snap, юниты systemd (`stack.service`), образы и контейнеры Docker/Podman через
   `GET`-запросы к локальному сокету. Из окружения берутся только имена переменных вроде
   `ALLOW_BUILTIN_DEP`. `ban_unfixed = true` — запрет уязвимых версий без исправления.
+- Команды запуска MCP (`npx`/`uvx`/`pipx run`/`uv tool run`) сверяются с блоклистом
+  (встроенные фейковые MCP-пакеты `karma365-mcp`, `dynamic-mcp` и др.) и `mcp_denylist`
+  (`mcp.blocklisted-package`, fail); `mcp_reviewed` — список проверенных точных версий,
+  всё остальное — `mcp.not-reviewed` (warn).
 - Коды выхода: `0` — норма, `1` — есть ошибки, `2` — ошибка использования/политики или
   запрещённая цель, `3` — `--pre-session`: недоверенный каталог. `-q` — без вывода при успехе (для cron).
 
@@ -664,8 +689,24 @@ fail; исправление: `rm /etc/ssh/ssh_host_*; ssh-keygen -A`), `host.ss
 `llama-server` < b12340 (`--llama-version`), расширения из денайлиста (троянские
 `anthropic.claude-code` 2.1.312/2.1.313 и `[host.apps] extension_denylist`), IoC-ключ
 `svc-telemetry`, а с `--authorized-keys-baseline FILE` любой ключ вне эталона (ключи и
-отпечатки не печатаются). Подробности и чеклист по wfx-loot:
+отпечатки не печатаются). Также в `host apps`: Chrome/Chromium < 157.0.8103.50
+(`host.chrome-cve-2026-125350`, KEV), PHP ниже 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 или EOL
+(`host.php-cve-2026-109618`; бэкпорт из `changelog.Debian.gz` — info), записываемый
+пользователем каталог в `$PATH` раньше системных (`host.path-user-writable`,
+`host.path-shadow`; fail, если он подменяет `sudo`, `su`, `ssh` и т.п.), подменённый
+диспетчер или шим pyenv/rbenv/nodenv или перенаправленная ссылка Homebrew
+(`host.version-manager-tamper`), включённое автообновление расширений IDE
+(`host.ide-extension-autoupdate`). Подробности и чеклист по wfx-loot:
 [docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md).
+
+**Поиск секретов (`host secrets`, только по запросу, в `host all` не входит).** Читает
+типовые места токенов (`~/.cache/huggingface/token`, `~/.git-credentials`, `.env*` до двух
+уровней вглубь домашнего каталога, `~/.config/**` без профилей браузеров и кешей,
+`[host.secrets] extra_paths`) и имена переменных окружения. Сообщает `файл:строка`, вид
+ключа и замаскированную форму с одним публичным префиксом (`hf_…[37 chars]`); значения не
+печатаются никогда. `host.secret-file` — warn. На хосте-песочнице или рое
+(`[host.secrets] forbid_exchange_keys = true` или `--sandbox-host`) ключ биржи или кошелька —
+fail `host.exchange-key-forbidden`.
 
 Бинарник собирается в песочнице, а запускается на хосте: из песочницы не видно пакеты,
 сокеты и firewall хоста.

@@ -70,11 +70,16 @@ func homeDirs(e *env) []string {
 	return append(out, e.glob("/home/*")...)
 }
 
-func checkApps(e *env, opt Options, p *Policy, c *findings.Collector) {
+func checkApps(e *env, opt Options, p *Policy, dpkg map[string]dpkgPkg, c *findings.Collector) {
 	checkVSCode(e, opt, c)
 	checkLlama(e, opt, c)
 	checkExtensions(e, p, c)
 	checkSSHIOC(e, c)
+	checkChrome(e, opt, dpkg, c)
+	checkPHP(e, opt, dpkg, c)
+	checkPathOrder(e, opt.PathEnv, c)
+	checkVersionManagers(e, c)
+	checkExtensionAutoUpdate(e, c)
 }
 
 // ---- VS Code: CVE-2026-120779 (MCP elicitation notification -> command link) ----
