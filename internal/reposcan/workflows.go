@@ -25,8 +25,7 @@ type wfDoc struct {
 func (s *scanner) scanWorkflow(rel string, b []byte) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(b, &root); err != nil {
-		s.incomplete(rel + ": cannot parse YAML: " + err.Error())
-		s.add(Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "workflow YAML could not be parsed: " + err.Error()})
+		s.unparsed(rel, "cannot parse YAML: "+err.Error(), Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "workflow YAML could not be parsed: " + err.Error()})
 		return
 	}
 	if len(root.Content) == 0 {

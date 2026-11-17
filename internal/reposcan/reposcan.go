@@ -115,8 +115,12 @@ type Coverage struct {
 	SkippedDirs  []string       `json:"skipped_dirs,omitempty"`
 	NotChecked   map[string]int `json:"not_checked,omitempty"`   // images, archives, binaries, special files
 	PartialFiles []string       `json:"partial_files,omitempty"` // only the first MaxFileSize bytes scanned
-	Incomplete   []string       `json:"incomplete,omitempty"`    // reasons the verdict cannot be PASS
-	SemanticNote string         `json:"semantic_note,omitempty"` // static scan limits
+	// UnparsedFixtures: files in test/fixture trees that could not be
+	// parsed structurally (text checks still ran); not INCOMPLETE unless
+	// StrictImages (--strict-coverage).
+	UnparsedFixtures []string `json:"unparsed_fixtures,omitempty"`
+	Incomplete       []string `json:"incomplete,omitempty"`    // reasons the verdict cannot be PASS
+	SemanticNote     string   `json:"semantic_note,omitempty"` // static scan limits
 }
 
 // Report is the result of Scan.
@@ -216,6 +220,28 @@ func Scan(root string, opt Options) (*Report, error) {
 
 func (s *scanner) incomplete(reason string) {
 	s.rep.Coverage.Incomplete = append(s.rep.Coverage.Incomplete, reason)
+}
+
+// unparsed records a structured file the scanner could not parse. Inside a
+// test/fixture tree (test/, tests/, testdata/, fixtures/, specs/, ...)
+// deliberately broken files are routine (node, bun, deno, eslint, trivy
+// ship invalid package.json fixtures to test their own error paths), and
+// no tool loads them from the repository root: the finding becomes info and
+// the path is listed in coverage.unparsed_fixtures instead of making the
+// whole scan INCOMPLETE. The text checks (hidden Unicode, IOCs) still ran
+// on the bytes. --strict-coverage restores INCOMPLETE.
+func (s *scanner) unparsed(rel, reason string, f Finding) {
+	if isTestishPath(rel) && !s.opt.StrictImages {
+		f.Severity = SevInfo
+		f.Message += " (test/fixture tree: deliberately broken fixtures are common; text checks still ran)"
+		if n := len(s.rep.Coverage.UnparsedFixtures); n == 0 || s.rep.Coverage.UnparsedFixtures[n-1] != rel {
+			s.rep.Coverage.UnparsedFixtures = append(s.rep.Coverage.UnparsedFixtures, rel)
+		}
+		s.add(f)
+		return
+	}
+	s.incomplete(rel + ": " + reason)
+	s.add(f)
 }
 
 func (s *scanner) add(f Finding) {
@@ -476,8 +502,7 @@ func (s *scanner) file(p, rel string) {
 		s.rep.Coverage.PartialFiles = append(s.rep.Coverage.PartialFiles, rel)
 	}
 	if kind != "" && !utf8.Valid(b) && !partial {
-		s.incomplete(rel + ": control file is not valid UTF-8")
-		s.add(Finding{Rule: "encoding.invalid-utf8", Severity: SevWarn, Path: rel,
+		s.unparsed(rel, "control file is not valid UTF-8", Finding{Rule: "encoding.invalid-utf8", Severity: SevWarn, Path: rel,
 			Message: "control file is not valid UTF-8; clients may decode it differently than this scanner"})
 	}
 	s.hashIOCBytes(rel, b, partial)
