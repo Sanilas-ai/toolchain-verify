@@ -221,10 +221,15 @@ a sandboxed command where only `everywhere` deny rules apply. A path that is nam
 wrapper but is not the configured one (`./oss-run`) is denied.
 
 Fail-closed: unparsable input, an unknown hook payload or a missing policy blocks.
+On `--hook`, that deny is also a line in the mediator log. `policy check -c`
+without `--hook` still prints the shell decision only: it does not ask on
+`/dev/tty` and it does not write the log. The hook path is the action pipeline
+in the backlog section.
 
 ### Limits
 
-- It sees the command line, not data flow. `bash build.sh`, `python3 x.py`, a Makefile on
+- The exec-policy engine sees the command line, not data flow. The post hook
+  is what sees the tool result. `bash build.sh`, `python3 x.py`, a Makefile on
   the host or an alias can run anything; list such runners as `sandbox` in the policy if
   they matter. It is a guard rail against mistakes and injected instructions, not a
   security boundary — the container is.
@@ -384,9 +389,11 @@ workflows, package hooks and skill scripts. Each file is treated as untrusted da
 - `sandbox` — public Go helper that builds hardened `docker run` invocations.
 - `internal/hostsec` — host audit: dpkg versions, apt lists, unattended-upgrades, kernel floors, snaps, `/proc/net` and `ss` parsing, ufw rules/status, reconciliation.
 - `internal/execpolicy` — shell command splitter and host-vs-sandbox policy decisions.
+- `internal/pipeline` — admission, subject, argument filter, return-path hashes, mediator log.
+- `internal/trace` — session-journal reader (`trace`, `trace watch`).
 - `internal/models` — model artifact scan: format sniffing, pickle opcode walk, safetensors/GGUF checks, Ollama store/API report, external scanners.
 - `internal/reposcan` — repository scan (`scan`) and MCP tool-list lint (`mcp-tools`); IOC DB `iocs.toml`.
-- `cmd/toolchain-verify` — CLI (`scan`, `mcp-tools`, `check`, `pin`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `models`, `init`, `version`).
+- `cmd/toolchain-verify` — CLI (`scan`, `mcp-tools`, `mcp-lock`, `check`, `pin`, `agent`/`protect`, `exec-lint`, `docker`, `host`, `policy`, `posture`, `trace`, `toolcall`, `models`, `init`, `version`).
 
 ## Possible next steps
 
@@ -397,38 +404,204 @@ manifest. Still open for `pin`: pinning `version_regex`/`version_args` for new t
 Next: env-var checks
 (`GOFLAGS`, `NODE_OPTIONS`); signed manifests; GitHub Action wrapper; archive (zip) scanning in Downloads; extension audit.
 
-## Backlog: agent-trace analysis (design only, not implemented)
+## Accepted direction (2026-11-16)
 
-These need an agent *trace* (a recorded sequence of tool calls and results)
-or model internals, which this tool does not yet ingest. They are recorded
-here as deliberate future work, not shipped rules.
+Ship the verifier fixes below and a session trace. Do **not** put an LLM
+supervisor on top of either. The session journal is untrusted input: a poisoned
+tool result or instruction that already steered the working agent will ask a
+watcher model to ignore the finding. Allow, deny, and stop come from this
+process's exit code. A model may only restate a finding the verifier has
+already emitted. It does not grant exceptions and it does not decide to kill.
 
-- **Invariant-style "source → sink" toxic-flow rules over traces**
-  (ref [invariantlabs-ai/invariant](https://github.com/invariantlabs-ai/invariant)).
-  Today `mcp.toxic-flow` reasons statically about the *capability set* of a
-  tool list (untrusted-source + private-data + outbound-sink coexist). The
-  backlog item is a rule language over an actual trace that fires only when a
-  concrete flow occurs: data returned by an untrusted-source tool call (web
-  fetch, read issue/email) reaches the arguments of an outbound-sink call
-  (send/post/create-comment) in the same session. This removes false
-  positives from capability-only analysis and catches the real exfiltration
-  path. Needs a trace ingest format (OpenTelemetry-style spans, or a
-  provider transcript) and a taint model over tool arguments/results.
+`mcp.toxic-flow` stays a static capability check on a saved `tools/list`. The
+concrete source → sink check moves to the trace, where a real session either
+did or did not connect the calls.
 
-- **TaskTracker-style activation probes for task drift on local models**
-  (ref [microsoft/TaskTracker](https://github.com/microsoft/TaskTracker)).
-  Linear probes on an LLM's hidden activations detect when the model's task
-  has "drifted" after reading external data, without analysing the text.
-  Research item for the local tool-call models (`toolcall`): run a probe on
-  the base model's activations between reading an untrusted tool result and
-  the next tool call, and flag drift. Needs access to model activations
-  (llama.cpp hooks) and a trained probe; English-only probes to start.
+### Session trace (`toolchain-verify trace`)
 
-- **NeMo Guardrails policy-architecture comparison**
-  (ref [NVIDIA-NeMo/Guardrails](https://github.com/NVIDIA-NeMo/Guardrails)).
-  NeMo's Colang programmable rails (input/output/dialog/tool-call checks) are
-  a mature policy architecture. Backlog item: compare our deterministic
-  rule/severity model (`internal/findings`, `internal/execpolicy`) against
-  Colang rails and document which guarantees each gives, to decide whether a
-  programmable-policy layer is worth adding on top of the deterministic
-  verifier.
+Watch an agent that is already running. Tail its session journal and treat
+each new tool call as an event (name, class, arguments).
+
+Journals, and only these: Claude Code `~/.claude/projects/**/*.jsonl`, Codex
+session files, Cursor agent transcripts. `CredentialDirs` today refuses all of
+`~/.claude` and `~/.codex`; the trace is the exception that opens the journal.
+`auth.json`, `.credentials.json`, and the other credential files stay unopened.
+Evidence is redacted the same way as `scan`. Argument text is not printed.
+
+An action is unauthorized when any of these hold:
+
+- the shell command fails `execpolicy`;
+- a path argument hits a credential store or leaves `trusted_roots`;
+- a span of an untrusted tool result (page, issue, mail) reappears in an
+  outbound or out-of-repo write argument.
+
+`trace watch` follows the live file. Exit `1` on the first such event. The
+journal line is usually appended after the tool returns, so the first action
+has already run. `trace` on a finished journal is the same rules without the
+tail.
+
+`trace` is the client's journal. Its job is to be that journal. It is not the
+process the call must pass through, and a missing or rewritten journal is not
+a pass. The check that can block a call before it runs is the action pipeline
+below, and only when the client invokes the hook.
+
+### Verifier fixes (same decision)
+
+- `injection.pipe-to-shell`: judge the sentence. `never` / `don't` / `не` /
+  `никогда` in that sentence, or a match that sits only inside a fenced block,
+  is info. Fixtures from `docs/reports/2026-11-mass-scan.md`.
+- `execpolicy`: an unexpanded `argv[0]` (`$VAR`, `${VAR}`, including after
+  `sudo` / `env`) is deny, same path as an unparsable command.
+- `exec-lint`: a `toolchain-verify:sandboxed` marker counts only on the call
+  line and only next to a wrapper named in the policy. `shell=True`, `sh -c`,
+  and `eval` on that line still fail. A function that contains a sink is a
+  dirty name; a call of that name from an LLM file in the same directory is
+  `exec.unwrapped`.
+- One `findings.Finding`. Extra fields use `omitempty`. `rule`, `severity`,
+  `path`, `message` stay. Reports gain `schema_version`.
+- `host net` reads the local engine socket with the same GET queries as
+  `docker`. A published `HostPort` on `0.0.0.0` or `::` is `net.docker-bypass`
+  (fail). A remote `DOCKER_HOST` is not contacted.
+- `policy.db-stale` (warn) when `advisories.toml` or `iocs.toml` `updated` is
+  older than `agent.db_max_age_days` (default 45). No network. `--strict`
+  promotes it to fail.
+- Windows journal/repo open uses `FILE_FLAG_OPEN_REPARSE_POINT` and refuses a
+  reparse point. If that open is impossible, the verdict is INCOMPLETE, not PASS.
+- `agent.hook-binding`: `.claude/settings.json` and `~/.cursor/hooks.json` must
+  invoke this binary with `--hook claude` or `--hook cursor`. Otherwise
+  `agent.hook-missing` or `agent.hook-substituted` (fail). Secret files are
+  not opened.
+- `posture`: one command. It runs admission, then `--pre-session`,
+  `policy validate`, `mcp-lock --lock`, and the database-age check. The exit
+  status is the worst of the five. Admission is the detector added for the
+  action pipeline (`admit.container`, `admit.credential`, `admit.guard`,
+  `admit.env`, `admit.network`).
+- `instr.pin`: SHA-256 of the instruction files the agent will load, in a lock
+  beside `mcp.lock.json`. Later runs fail on `instr.drift`.
+- `toolcall scrub`: run a tool result through the hidden-Unicode strip and the
+  `injection.*` signals before it is returned to a context. Exit `1` when
+  override, exfil, or hidden Unicode remains. The model is not executed.
+- `policy --follow-script`: for `bash` / `sh` / `python` / `node`, if the
+  argument is a file inside the cwd, read it up to the size cap and run
+  `SplitShell` once. One file deep. Unreadable means deny.
+- `cred.transcript-perms`: stat session directories only. World-readable or a
+  foreign owner is fail. Contents stay unopened.
+- `scan --files -`: paths on stdin. The scanner still does not invoke git; a
+  pre-commit wrapper may pass `git diff --name-only`.
+
+## Backlog: testing and tracking model behavior (2026-11-16)
+
+Three roles. The analyzer and the journal were already shipped. The action
+pipeline on `policy --hook` and `posture` is shipped. It runs when the client
+invokes the hook. It is not a process the call is forced through.
+
+| Role | Question it answers | Shipped as |
+|---|---|---|
+| Static analyzer | What do the files allow before a session? | `agent`, `scan`, `exec-lint`, `models`, `host`, `docker`, and `posture` admission |
+| Journal | What did the client agree to write down? | `trace` |
+| Proxy | May this call leave, and what came back? | `policy check --hook claude\|cursor` before the call, `claude-post` / `cursor-post` on the way back. The client must invoke the hook |
+
+No second model sits on this path. A poisoned tool result that already steered the working agent will ask a watcher model to ignore the finding. Allow, deny, and the record come from this process.
+
+Nothing stands on the path by default. `policy --hook` and `toolcall` run only when a client calls them. An omitted call is not a pass of this check. The check did not run.
+
+### Action pipeline (shipped)
+
+Order, for one call the client submits: admission, then the mediator, then the subject and the exec policy, then the argument filter, then the tool, then the scrub of the result, then the same mediator record. `trace` stays beside the pipe.
+
+Admission is `posture`, before any tool call. `--agent-netns` is `none` or anything else; an empty value is a fail (`admit.network`). With `require_container` set, a process that is not in a container is `admit.container`. `admit.credential` fires when this uid can open `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.claude/.credentials.json`, or `~/.codex/auth.json`. `admit.guard` fires when this uid can append `~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.config/toolchain-verify/exec-policy.toml`, or the file given to `--policy`. `admit.env` fires when a name or a value in the operator-supplied `--agent-env` file matches a token, a key, or a known secret prefix (`AKIA`, `ghp_`, `github_pat_`, `sk-`, `xox`). The finding records the variable name. The value is not printed. `/proc/*/environ` is not read. `posture` then runs the four older checks. The exit status is the worst of admission and those four.
+
+The hook writes `--mediate-log` before it returns allow. The path must sit outside `--repo`. A credential basename is refused. On Unix the append is `O_APPEND` with `O_NOFOLLOW`, mode `0600`. One JSON line holds `rule`, `verdict`, `tool`, and `subject` (`uid`, `container`, `repo`, `session`). `source` is set on the return path to the `tool_use_id`. The line does not hold argument text or a tainted span. A missing policy or an unparsable payload appends a deny and blocks (Claude exit 2, Cursor `{"permission":"deny"}`).
+
+The subject is the process running the hook: uid, whether `check.DetectContainer()` is true, `--repo` (default cwd), and `--session`. A non-empty `--allow-subject` list allows only a matching uid, container flag, and repo. The session is recorded and is not part of the match. An empty list adds no gate. A mismatch is `pipeline.subject`.
+
+Arguments are judged for every class, including a calm tool name. A credential fragment (`/.ssh/`, `/.gnupg/`, `/.aws/`, `auth.json`, `.credentials.json`, `/.config/gh/`, `/.kube/`, `.ssh/id_`) is `pipeline.path`. With a non-empty `--trusted` list, an absolute path outside those roots is the same rule. An empty trusted list skips the outside-root check, so `Read` of `/etc/passwd` with no `--trusted` stays allow. Class `other` is `pipeline.class` and is not an allow. Shell still goes through `execpolicy`. A shell allow also needs `--approve` or a human `yes` on `/dev/tty` (`--tty-file`, default `/dev/tty`). Silence or `no` is `pipeline.tty`. The command is shown on that terminal so the human can answer. It is not copied into the log.
+
+`claude-post` and `cursor-post` run `toolcall.Scrub` on `tool_response`. A failing scrub denies with that rule. A tool classed `untrusted` is remembered as SHA-256 hashes of 1–3 word phrases, 8–200 bytes, at most 64 phrases, under its `tool_use_id`, in `<mediate-log>.state` (mode `0600`, symlink refused, at most 32 results). The text is not stored. Without `--mediate-log` an untrusted result that scrub would allow is `pipeline.flow`. A later call whose arguments repeat a remembered phrase is `pipeline.flow`, and `source` is that id.
+
+Editor writes, `git push`, the clipboard, the browser, and the model-provider request are not on this hook. Admission is what keeps those closed: no secret mounted, network `none`, and the policy and the hook outside the tree the agent writes.
+
+Shipped surface:
+
+- static analysis of the toolchain and of LLM-adjacent code (`check`, `pin`, `exec-lint`);
+- Docker host hygiene, host security, model-artifact scan, repository scan;
+- MCP tool-list lint and MCP lock;
+- `toolcall` parser, schema gate, and scrub;
+- `execpolicy`, called by the hook as Claude `PreToolUse` or Cursor `beforeShellExecution`, and by `policy check -c` with no mediator and no tty;
+- the action pipeline above (`posture` admission, mediator log, subject, argument filter, post-hook scrub, flow by `tool_use_id`);
+- `trace`, a journal written after the fact.
+
+### Recorded hypotheses
+
+Each line was a guess about the empty cell. The status is what the code does now. A line that is still open stays here so a later test can confirm or drop it.
+
+- **Three locks. Shipped on the hook, and the third is partial.** Block before the tool runs: a missing policy, a bad payload, or a deny returns before the client is told to proceed. Filter the arguments and the bytes on the way back: `pipeline.path`, `pipeline.class`, scrub, `pipeline.flow`. The mediator log sits outside the repository, and a rewritten client journal does not change it. The same uid can still kill the hook process or skip the call. Skipping the call does not make this check pass.
+- **A subject. Shipped as four fields.** uid, container flag, repository root, and a session id. `--allow-subject` matches the first three. The session is recorded and is not part of the match. An empty allow list adds no gate. This is not a separate credential identity.
+- **The data, not the capability. Partial.** The post hook scrubs the result and remembers hashes of an untrusted result under `tool_use_id`. A later call that repeats a phrase is `pipeline.flow`. `mcp.toxic-flow` is still a static check on a saved `tools/list`. Bytes that move through the editor or the model provider are not seen.
+- **Secrets unreachable from the start. Partial.** Admission fails when the uid can open a credential, can append the hook or the exec policy, when `--agent-env` contains a secret, when the network is not `none`, or when `require_container` is set and this process is not in a container. The check does not move the process into a container. The container with no secrets and no network remains the barrier.
+- **Every exit, not only MCP and shell. Still open.** The hook sees the calls the client submits. An editor write, `git push`, the clipboard, the browser, and the model-provider request that never arrive as a hooked call stay outside it.
+- **The tool process's own rights. Still the isolation boundary.** The hook may allow a calm tool name while that server, running as the user, opens `~/.ssh` itself. `pipeline.path` denies a credential path in the arguments. It does not constrain the tool's own code.
+- **A person, on a channel the model cannot write. Shipped for a shell allow on the hook.** The hook denies unless `--approve` is set or the human answers `yes` on `/dev/tty`. Silence is `pipeline.tty`. `policy check -c` without `--hook` does not ask. The answer is not written into the mediator log.
+- **The running permission set. Still open as a read of another process.** `/proc/*/environ` is not read. The operator passes `--agent-env`. `cred.env` still looks at the scanner's environment.
+- **Default allow of the substrate. Still true off the hook.** `policy check -c` follows the exec policy, whose default for an unmatched command can be `host`, with no subject gate and no tty. On the hook, a shell allow still needs the human, a non-empty `--allow-subject` can refuse the uid, and class `other` is deny.
+- **The agent is the user. Still open for editor writes.** The hook judges the calls it is given. Harm in ordinary editor actions is not a hooked call.
+- **The agent rewrites its own guard. Partial.** `admit.guard` fails when this uid can append the hook file or the exec policy. `instr.pin` / `instr.drift` catches a changed pin on the next audit and does not stop the live write of the rules the next session will load.
+- **Egress of bytes, not of actions. Still open.** A secret that has entered the context window leaves on the next request to the model provider. The hook does not see that stream.
+- **The provider channel. Still open.** A local hook does not see the request to the model provider. The secret the agent read leaves inside the prompt.
+- **The fourth question.** The analyzer answers "what could this agent do here?". The journal answers "what did the client claim happened?". The hook answers "may this call proceed?" for a call the client submits. The cell that stays open is the authority the process already has. Admission reports it. The container is what removes it.
+
+### One hole, named
+
+One hole has two names: **the proxy's own record** and **the process's ambient authority**. Do not split it into two roadmap items. This is the recognition, not a new plan.
+
+`trace` is the client's diary. The hook writes a different file. After an incident, a hook with no log of its own would leave only the client's version of what happened. `--mediate-log` is that record: the process on the path appends allow or deny, and the tests are that a fake allow in the client journal leaves the log unchanged and that deleting the client journal leaves the deny in place. The log has to live in a directory the agent cannot write. The same uid can delete a file it can write.
+
+The other face is the authority the process already has before any call. While the agent runs as the user, it can read the home directory, rewrite the hook, and open the network without asking. A missed call is unnecessary. Admission reports that condition and does not remove it. The analyzer, the journal, and the hook are rails around that fact. The control is a process that does not have the user's ambient authority. The container with no secrets and no network is that boundary.
+
+### Three locks, in this order
+
+These are the tests of one model action. A fixture is one call: tool name, arguments, and optionally the previous untrusted result. The judge is the exit code and the mediator log, never another model.
+
+1. **Block before the action does anything.** The call does not reach the tool until the hook returns allow. No answer, an unreadable policy, or an unparsable command is deny, and the mediator log records that deny. A `trace` line that appears only after the tool has run means the journal saw the call too late. Claude `PreToolUse` exit 2 and Cursor `beforeShellExecution` `deny` are the clients that can hold the call.
+2. **Filter the action itself, and the bytes on the way back.** The hook sees the command line, the paths, and the arguments. `Read` of `~/.ssh/id_ed25519` is `pipeline.path` because of the path. Class `other` is `pipeline.class`. On the way back, hidden Unicode, an instruction override, or a secret fragment is deny (`toolcall` scrub), and a later call that repeats a remembered phrase is `pipeline.flow`. Fixtures go both ways: a calm name with a credential path denies, and `Read` of `/etc/passwd` with no `--trusted` allows.
+3. **The subject must not be able to switch the observer off.** The mediator log is outside `--repo`, a symlink at that path is refused, and a fake allow in the client journal does not change the log. `admit.guard` fails when this uid can append the hook or the exec policy. The same uid can still kill the hook process or skip the call. An absent client journal is not a pass of `trace`. An omitted hook call is not a pass of the hook. The directory of the log has to be one the agent cannot write; the binary does not create that protection by itself.
+
+### Ambient authority, before any call
+
+This is one face of the hole named above, not a separate project. The forgotten question: in whose name can the process already read the home directory, rewrite the hook, and open the network, without making a call at all? A missed call is unnecessary while the agent runs as the user. `Read` of a key is dangerous because the process is allowed to open the key.
+
+The boundary is the container with no secrets and no network. `posture` runs the tests below and fails even when the journal is empty. Passing them does not put the process in that container.
+
+Tests, with no tool call in the fixture:
+
+- the agent uid can open a credential file;
+- the agent uid can write the hook file or the exec policy;
+- a credential or a token is in the agent environment;
+- the agent network namespace is not `none`.
+
+Each one is a fail even though the journal is empty.
+
+### The record the agent cannot write
+
+This is the other face of the same hole. `trace` is written by the client. The hook writes `--mediate-log`: append-only, outside `--repo`, credential basenames refused, `O_NOFOLLOW` on Unix. The line holds the rule, the verdict, the tool name, and the subject. It does not hold argument text or the tainted span. Tests: the agent appends a fake allow to its own journal and the mediator log is unchanged; the agent deletes its journal and the mediator log still has the deny. The return-path file `<mediate-log>.state` stores hashes only and refuses a symlink.
+
+### Holes that stay on `trace`
+
+`trace` keeps these behaviors. They are what a journal does. The hook answers the same questions with its own rules and does not turn `trace` into a proxy.
+
+- A `tool_result` in the journal is not tied to its `tool_use` by id. The hook keys hashes by `tool_use_id`.
+- The `trace` command does not accept trusted roots. The hook does (`--trusted`).
+- Journal taint is whitespace-separated tokens of 24–200 bytes, at most 64. The hook counts 1–3 word phrases of 8–200 bytes, at most 64 phrases and 32 results.
+- The journal is opened with `os.Open`. Refusal is by basename. The mediator log refuses a symlink at the final path.
+- `trace` exit 1 does not signal the agent. This process does not have the agent's pid. The hook's exit code is what the client uses to block the call before it runs.
+
+### Left as research
+
+- TaskTracker-style activation probes on local-model hidden states
+  ([microsoft/TaskTracker](https://github.com/microsoft/TaskTracker)). Needs
+  llama.cpp activations and a trained probe. Not a watcher, and not on the
+  verdict path.
+- A written comparison with NeMo Colang
+  ([NVIDIA-NeMo/Guardrails](https://github.com/NVIDIA-NeMo/Guardrails)) may
+  document which guarantees the deterministic rules already give. Colang does
+  not become the allow/deny layer.

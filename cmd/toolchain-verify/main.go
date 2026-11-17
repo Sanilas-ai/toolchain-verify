@@ -40,8 +40,10 @@ Usage:
   toolchain-verify host [apt|net|vps|all] [-m toolchain.toml] [--ufw-status FILE|-] [--ss FILE|-]
   toolchain-verify host vps [--profile vps] [--sshd-t FILE|-] [--timedatectl FILE|-] [--git-version FILE|-] [--nft FILE|-]
                          [--root DIR] [--strict] [--json] [-v] [-q]
-  toolchain-verify policy check [-m policy.toml] [--hook claude|cursor] [--in-sandbox|--on-host]
-                         [--json] [-q] (-c 'CMD' ... | -- ARGV...)
+  toolchain-verify policy check [-m policy.toml] [--hook claude|cursor|claude-post|cursor-post]
+                         [--in-sandbox|--on-host] [--mediate-log FILE] [--session ID]
+                         [--repo DIR] [--trusted DIR]... [--allow-subject SPEC]...
+                         [--approve] [--json] [-q] (-c 'CMD' ... | -- ARGV...)
   toolchain-verify policy validate [-m policy.toml]
   toolchain-verify models [-m toolchain.toml] [--ollama-dir DIR]... [--ollama-url URL]
                           [--verify-blobs] [--no-ollama] [--external auto|require|off]
@@ -53,7 +55,10 @@ Usage:
   toolchain-verify mcp-tools [--pin FILE] [--write-pin FILE] [--json|--sarif] [--strict] TOOLS.json|-
   toolchain-verify mcp-lock  (--write FILE | --lock FILE) [--tools TOOLS.json] [-m manifest]
                          [--trusted DIR]... [--json] [--strict]
-  toolchain-verify toolcall parse|bench|grounded|profiles|stops ...
+  toolchain-verify toolcall parse|bench|grounded|scrub|profiles|stops ...
+  toolchain-verify trace [watch] FILE
+  toolchain-verify posture [-m FILE] [--trusted DIR]... [--lock FILE] [--policy FILE]
+                         [--agent-env FILE] [--agent-netns none|other]
   toolchain-verify pin   [-m toolchain.toml] [--root DIR] [--version exact|tilde|caret|min|keep]
                          [--no-sha256] [--path] [--tool NAME]... [--dry-run] [--ignore-container]
   toolchain-verify init  [-m toolchain.toml] [--force]
@@ -87,6 +92,12 @@ Usage:
          Never runs apt, dpkg, ufw or ss.
   policy decide whether a proposed command may run on the host or only via
          the sandbox (oss-run); for agent pre-exec hooks. Exit 1 = blocked.
+         A hook writes the mediator log (rule, verdict, tool name, subject)
+         and does not copy argument text into it. Shell allows need --approve
+         or a human "yes" on /dev/tty. An unknown tool class is denied.
+         claude-post / cursor-post scrub the tool result before it re-enters
+         the context and, with --mediate-log, remember an untrusted result
+         by hash. Without that log an untrusted result is denied.
   scan   read-only scan of a repository for agent/IDE/package control files
          (AGENTS.md, CLAUDE.md, rules, skills, MCP configs, agent hooks such
          as SessionStart, .vscode/tasks.json folderOpen, CI workflows,
@@ -152,6 +163,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdMCPLock(args[1:], stdout, stderr)
 	case "toolcall":
 		return cmdToolcall(args[1:], stdin, stdout, stderr)
+	case "trace":
+		return cmdTrace(args[1:], stdout, stderr)
+	case "posture":
+		return cmdPosture(args[1:], stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "toolchain-verify", buildVersion)
 		return 0
@@ -308,6 +323,8 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 	cwdFlag := fs.String("cwd", "", "working directory to evaluate (default: current)")
 	preSession := fs.Bool("pre-session", false, "only check the working directory; exit 3 if it is untrusted (run before starting an agent)")
 	allowCwd := fs.Bool("allow-untrusted-cwd", false, "downgrade cwd.untrusted to a warning (and let --pre-session pass)")
+	pinInstr := fs.String("pin-instructions", "", "write SHA-256 pins of instruction files under the working directory to FILE and exit")
+	instrLock := fs.String("instructions-lock", "", "fail with instr.drift when instruction files differ from FILE")
 	quarantine := fs.Bool("quarantine", false, "move planted instruction/MCP files found in untrusted dirs into the quarantine dir")
 	quarantineDir := fs.String("quarantine-dir", "", "quarantine destination (default agent.quarantine_dir or ~/.local/state/toolchain-verify/quarantine)")
 	noHost := fs.Bool("no-host-inventory", false, "skip snap, systemd and Docker/Podman engine inventory")
@@ -346,7 +363,8 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 	var pol *agent.Policy
 	opt := agent.Options{Home: h, Cwd: cwd, InContainer: check.DetectContainer(), ExtraTrusted: trusted,
 		Scope: *scope, ExtraAdvisories: advisories, NoBuiltinAdvisories: *noBuiltin, Strict: *strict,
-		AllowUntrustedCwd: *allowCwd, Quarantine: *quarantine, QuarantineDir: *quarantineDir, NoHostInventory: *noHost}
+		AllowUntrustedCwd: *allowCwd, Quarantine: *quarantine, QuarantineDir: *quarantineDir, NoHostInventory: *noHost,
+		InstructionLock: *instrLock}
 	explicit := flagSet(fs, "m", "manifest")
 	mpath := *path
 	if !explicit {
@@ -371,6 +389,25 @@ func cmdAgent(args []string, stdout, stderr io.Writer) int {
 		pol = m.Agent
 		opt.RequireContainer = m.RequireContainer
 		opt.ManifestDir = m.Dir
+	}
+	if *pinInstr != "" {
+		pins, extra, err := agent.CollectInstructions(pol, opt)
+		if err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
+		if err := agent.WriteInstructionLock(*pinInstr, pins); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
+		fmt.Fprintf(stdout, "pinned %d instruction file(s) to %s\n", len(pins), *pinInstr)
+		if len(extra) > 0 {
+			for _, f := range extra {
+				fmt.Fprintf(stderr, "  %s  %s\n", f.Rule, f.Path)
+			}
+			return 1
+		}
+		return 0
 	}
 	var rep *agent.Report
 	var err error

@@ -80,6 +80,9 @@ type Policy struct {
 	// Default: DOCKER_HOST (unix:// only), /var/run/docker.sock, then the
 	// rootless Docker / Podman sockets under $XDG_RUNTIME_DIR.
 	DockerSocket string `toml:"docker_socket"`
+	// DBMaxAgeDays is how old advisories.toml `updated` may be before
+	// policy.db-stale (default 45). Negative disables the check.
+	DBMaxAgeDays int `toml:"db_max_age_days"`
 	// Strict makes warnings fail the run.
 	Strict bool `toml:"strict"`
 	// Ignore suppresses findings: entries are "rule" or "rule:path-glob".

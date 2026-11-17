@@ -7,6 +7,40 @@ this project uses [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Session trace (`trace`, `trace watch`) reads a Claude, Codex, or Cursor
+  journal and fails on a shell call the exec policy rejects, a credential
+  or out-of-root path, or an untrusted tool-result span that reappears in
+  an outbound or write argument. The journal line is untrusted input: the
+  verdict is the process exit code, not a second model.
+- `posture` runs admission, pre-session, exec-policy validate, mcp-lock
+  verify, and the advisory-database age check. The exit status is the worst
+  of the five. Admission (`--agent-env`, `--agent-netns`) fails closed on a
+  missing `none` network, a required container that this process is not in,
+  a credential this uid can open, a hook or exec policy this uid can append,
+  or a secret name in the supplied env file. `/proc/*/environ` is not read.
+- `policy check --hook` is the action pipeline: mediator log
+  (`--mediate-log`, outside `--repo`, rule, verdict, tool name, subject; no
+  argument text), `--allow-subject`, a human `yes` on `/dev/tty` or
+  `--approve` for a shell allow, `pipeline.path` / `pipeline.class` on
+  arguments, and `claude-post` / `cursor-post` to scrub a tool result and
+  remember an untrusted result as hashes keyed by `tool_use_id`
+  (`pipeline.flow`). `policy check -c` without `--hook` does not ask on the
+  terminal and does not write the log. `trace` stays the client journal.
+- `toolcall scrub` strips hidden Unicode from a tool result and fails when
+  an injection verdict remains. `scan --files -` scans only the paths on
+  stdin. `policy check --follow-script` judges one script file inside the
+  working directory. `agent --pin-instructions` / `--instructions-lock`
+  hashes the instruction files an agent will load.
+- Verifier fixes: negated or fenced `curl | sh` is info; an unexpanded
+  argv[0] (including after sudo/env) is deny; `toolchain-verify:sandboxed`
+  counts only on the call line next to a named wrapper, and a function that
+  contains a sink is a dirty name; reports carry `schema_version` 1;
+  a Docker port published on 0.0.0.0 or :: is `net.docker-bypass`; an
+  advisory database older than `db_max_age_days` (default 45) is
+  `policy.db-stale`; Windows opens refuse reparse points; a Claude or
+  Cursor settings file without this binary is `agent.hook-missing` or
+  `agent.hook-substituted`; world-readable session directories are
+  `cred.transcript-perms`.
 - Agent sandbox-isolation rules (`agent`): `agent.sandbox-approval-matrix`
   models the Codex `sandbox_mode` × `approval_policy` grid (danger-full-access
   + never = critical fail); `agent.no-isolation` flags Anthropic
@@ -35,8 +69,9 @@ this project uses [SemVer](https://semver.org/).
   secrets or `id-token`/`contents`/`packages: write`).
 - Findings of `host` and `scan` carry a `cwe` list in JSON; `-v` prints it.
 - Docs: `docs/agent-isolation.md` (rules + Codex sandbox×approval reference
-  matrix + CWE mapping); agent-trace analysis backlog in `DESIGN.md`
-  (Invariant source→sink, TaskTracker probes, NeMo Guardrails comparison);
+  matrix + CWE mapping, and the action pipeline); `DESIGN.md` records the
+  shipped hook pipeline, the trace, and the verifier fixes (TaskTracker
+  probes and a NeMo Colang comparison stay research);
   agent tool update cooldown (~48 h) guidance; MCP governance gateways
   (ContextForge, Lunar MCPX, Agent Governance Toolkit, MCP-Defender) in the DESIGN backlog.
 

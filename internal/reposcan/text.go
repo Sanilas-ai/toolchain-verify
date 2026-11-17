@@ -221,6 +221,7 @@ func (s *scanner) scanTextControl(rel, kind string, b []byte) {
 	for i, part := range parts {
 		sig := signals(canonical(part))
 		rule, sev := verdictFor(sig, true)
+		rule, sev = adjustPipe(part, rule, sev)
 		if rule == "" {
 			continue
 		}

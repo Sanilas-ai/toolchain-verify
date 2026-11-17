@@ -152,8 +152,11 @@ func run(ctx context.Context, code string) {
 }
 
 func direct(code string) {
-	// toolchain-verify:sandboxed — runs inside the oss sandbox container
-	exec.Command("sh", "-c", code).Run()
+	exec.Command("python3", sandbox.CommandName, code).Run() // toolchain-verify:sandboxed
+}
+
+func bad(code string) {
+	exec.Command("sh", "-c", code).Run() // toolchain-verify:sandboxed
 }
 
 func custom(code string) { exec.Command("my-jail", code).Run() }
@@ -169,8 +172,30 @@ spawn("run-isolated", ["--", "node", "-e", out]);
 	if len(find(rep, "exec.wrapped", "wrapped.go")) != 1 || len(find(rep, "exec.wrapped", "tool.mjs")) != 1 {
 		t.Errorf("wrapped: %+v", rep.Findings)
 	}
-	if !rep.OK {
-		t.Errorf("all calls are wrapped or annotated: %+v", rep.Findings)
+	if len(find(rep, "exec.unwrapped", "wrapped.go")) != 1 {
+		t.Errorf("sh -c on an annotated line must still fail: %+v", rep.Findings)
+	}
+}
+
+func TestDirtyNameCall(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "tool.py", `import subprocess
+import anthropic
+def run_tool(code):
+    return subprocess.run(code, shell=True)
+
+def main(reply):
+    run_tool(reply)
+`)
+	rep := lint(t, dir, nil, true)
+	calls := 0
+	for _, f := range find(rep, "exec.unwrapped", "tool.py") {
+		if strings.Contains(f.Message, "call of run_tool") {
+			calls++
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("dirty call: %+v", rep.Findings)
 	}
 }
 

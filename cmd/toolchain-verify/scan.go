@@ -41,6 +41,7 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 	includeDeps := fs.Bool("include-deps", false, "also scan node_modules, .venv, vendor, ...")
 	strictCov := fs.Bool("strict-coverage", false, "unscanned images/archives/binaries make the result INCOMPLETE")
 	listIOCs := fs.Bool("list-iocs", false, "print the IOC database and exit")
+	filesFrom := fs.String("files", "", "scan only these paths (one per line); - reads stdin. Does not invoke git")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -62,6 +63,26 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 	}
 	opt := reposcan.Options{MaxFileSize: *maxFile, MaxFiles: *maxFiles, MaxDepth: *maxDepth, MaxTotal: *maxTotal,
 		Timeout: *timeout, IncludeDeps: *includeDeps, IOCs: db, Ignore: ignore, StrictImages: *strictCov}
+	if *filesFrom != "" {
+		var r io.Reader
+		if *filesFrom == "-" {
+			r = os.Stdin
+		} else {
+			f, err := os.Open(*filesFrom)
+			if err != nil {
+				fmt.Fprintln(stderr, "error:", err)
+				return 2
+			}
+			defer f.Close()
+			r = f
+		}
+		b, err := io.ReadAll(io.LimitReader(r, 8<<20))
+		if err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
+		opt.OnlyFiles = strings.Split(string(b), "\n")
+	}
 	if *baseline != "" {
 		bl, err := reposcan.LoadBaseline(*baseline)
 		if err != nil {

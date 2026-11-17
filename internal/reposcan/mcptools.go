@@ -23,6 +23,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/Sanilas-ai/toolchain-verify/internal/findings"
 	"unicode"
 )
 
@@ -139,7 +141,7 @@ var (
 // LintMCPTools lints tool definitions. pin may be nil.
 func LintMCPTools(b []byte, pin *ToolPin) (*Report, []Tool, error) {
 	tools, dups, err := parseTools(b)
-	rep := &Report{Root: "tools/list", Coverage: Coverage{NotChecked: map[string]int{},
+	rep := &Report{SchemaVersion: findings.SchemaVersion, Root: "tools/list", Coverage: Coverage{NotChecked: map[string]int{},
 		SemanticNote: "static lint of tool metadata; tool behaviour and later tools/list changes are not observed (use --pin)"}}
 	s := &scanner{rep: rep, seen: map[string]bool{}}
 	for _, d := range dups {

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Sanilas-ai/toolchain-verify/internal/findings"
 )
 
 // Options carry environment facts; zero values are filled from the process.
@@ -47,8 +49,11 @@ type Options struct {
 	// DefaultQuarantineDir). Off by default: the audit is read-only.
 	Quarantine    bool
 	QuarantineDir string
-	// Now defaults to time.Now (quarantine batch names).
+	// Now defaults to time.Now (quarantine batch names and database age).
 	Now func() time.Time
+	// InstructionLock, when set, compares instruction-file hashes with
+	// this lock and fails on instr.drift.
+	InstructionLock string
 	// NoHostInventory disables snap / systemd / Docker inventory.
 	NoHostInventory bool
 	// DockerSocket overrides agent.docker_socket ("off" disables).
@@ -97,6 +102,8 @@ type resolved struct {
 	systemdDirs     []string
 	quarantineDir   string // "" = quarantine off
 	now             func() time.Time
+	instructionLock string
+	dbMaxAgeDays    int
 }
 
 // Resolve applies defaults and safety refusals without touching the disk
@@ -208,6 +215,8 @@ func resolve(p *Policy, opt Options) (*resolved, error) {
 	if r.now == nil {
 		r.now = time.Now
 	}
+	r.instructionLock = opt.InstructionLock
+	r.dbMaxAgeDays = p.DBMaxAgeDays
 	if len(p.InventoryPaths) == 0 {
 		// npm -g / pipx with a custom prefix (the prefix in ~/.npmrc is not
 		// read: .npmrc is a credential file).
@@ -365,6 +374,10 @@ func Run(p *Policy, opt Options) (*Report, error) {
 			Message: fmt.Sprintf("%s: %s", s.Kind, s.Why)})
 	}
 	checkCredentials(r, c)
+	checkTranscriptPerms(r, c)
+	checkHooks(r, c)
+	checkInstructionLock(r, c)
+	checkDBAge(r, c, db.Updated)
 	if r.supplyChain {
 		checkSupplyChain(r, c)
 	}
@@ -409,6 +422,7 @@ func (r *resolved) finish(c *collector, rep *Report, strict bool) {
 	if r.quarantineDir != "" {
 		r.quarantine(c, rep)
 	}
+	rep.SchemaVersion = findings.SchemaVersion
 	rep.Findings = c.sorted()
 	rep.Ignored = c.ignored
 	fail, warn, _ := rep.Counts()
@@ -448,6 +462,9 @@ func RunPreSession(p *Policy, opt Options) (*Report, error) {
 		rep.Incomplete = true
 	}
 	checkCwd(r, c)
+	checkTranscriptPerms(r, c)
+	checkHooks(r, c)
+	checkInstructionLock(r, c)
 	cwd := filepath.Clean(r.cwd)
 	if d, ut := r.isUntrustedDir(cwd); ut {
 		var configs []foundConfig

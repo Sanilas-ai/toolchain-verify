@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sanilas-ai/toolchain-verify/internal/findings"
 	"github.com/Sanilas-ai/toolchain-verify/internal/manifest"
 	"github.com/Sanilas-ai/toolchain-verify/internal/version"
 )
@@ -53,11 +54,12 @@ type Result struct {
 
 // Report is the outcome for a whole manifest.
 type Report struct {
-	Manifest    string   `json:"manifest"`
-	InContainer bool     `json:"in_container"`
-	OK          bool     `json:"ok"`
-	Problems    []string `json:"problems,omitempty"`
-	Tools       []Result `json:"tools"`
+	SchemaVersion int      `json:"schema_version"`
+	Manifest      string   `json:"manifest"`
+	InContainer   bool     `json:"in_container"`
+	OK            bool     `json:"ok"`
+	Problems      []string `json:"problems,omitempty"`
+	Tools         []Result `json:"tools"`
 }
 
 // Counts returns the number of ok, failed and skipped tools.
@@ -80,7 +82,7 @@ func Run(m *manifest.Manifest, manifestPath string, opt Options) *Report {
 	if opt.Timeout == 0 {
 		opt.Timeout = 10 * time.Second
 	}
-	rep := &Report{Manifest: manifestPath, OK: true}
+	rep := &Report{SchemaVersion: findings.SchemaVersion, Manifest: manifestPath, OK: true}
 	if opt.InContainer != nil {
 		rep.InContainer = *opt.InContainer
 	} else {

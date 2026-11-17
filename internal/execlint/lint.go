@@ -33,16 +33,17 @@ type Options struct {
 
 // Report is the result of a lint run.
 type Report struct {
-	Roots     []string           `json:"roots"`
-	Mode      string             `json:"mode"`
-	Strict    bool               `json:"strict"`
-	OK        bool               `json:"ok"`
-	Files     int                `json:"files_scanned"`
-	LLMFiles  int                `json:"llm_files"`
-	Sinks     int                `json:"exec_sinks"`
-	Truncated bool               `json:"truncated,omitempty"`
-	Findings  []findings.Finding `json:"findings"`
-	Ignored   int                `json:"ignored,omitempty"`
+	SchemaVersion int                `json:"schema_version"`
+	Roots         []string           `json:"roots"`
+	Mode          string             `json:"mode"`
+	Strict        bool               `json:"strict"`
+	OK            bool               `json:"ok"`
+	Files         int                `json:"files_scanned"`
+	LLMFiles      int                `json:"llm_files"`
+	Sinks         int                `json:"exec_sinks"`
+	Truncated     bool               `json:"truncated,omitempty"`
+	Findings      []findings.Finding `json:"findings"`
+	Ignored       int                `json:"ignored,omitempty"`
 }
 
 // Counts returns the number of findings per severity.
@@ -154,7 +155,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 		base:     base,
 		home:     home,
 		c:        &findings.Collector{Ignore: p.Ignore},
-		rep:      &Report{Roots: roots, Mode: mode, Strict: opt.Strict || p.Strict},
+		rep:      &Report{SchemaVersion: findings.SchemaVersion, Roots: roots, Mode: mode, Strict: opt.Strict || p.Strict},
 	}
 	if l.maxFiles <= 0 {
 		l.maxFiles = 50000
@@ -168,6 +169,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	for _, r := range roots {
 		l.walk(r)
 	}
+	l.reportDirtyCalls()
 	l.rep.Findings = l.c.Sorted()
 	l.rep.Ignored = l.c.Ignored
 	l.rep.OK = findings.OK(l.rep.Findings, l.rep.Strict)
@@ -188,6 +190,11 @@ type linter struct {
 	home     string
 	c        *findings.Collector
 	rep      *Report
+	// dirty maps a directory to function names whose body contains an
+	// exec sink. A call of that name from an LLM file in the same
+	// directory is exec.unwrapped.
+	dirty    map[string]map[string]bool
+	llmFiles []string
 }
 
 func (l *linter) excluded(path, root string) bool {
@@ -320,7 +327,12 @@ func (l *linter) file(path string, size int64) {
 		return
 	}
 	l.rep.Files++
-	for _, f := range analyze(path, lg, string(data), l.wrappers, l.markers, l.sev(), l.rep) {
+	text := string(data)
+	if llm, _ := llmContext(lg, text, l.markers); llm {
+		l.llmFiles = append(l.llmFiles, path)
+	}
+	l.noteDirty(filepath.Dir(path), dirtyNames(lg, strings.Split(text, "\n")))
+	for _, f := range analyze(path, lg, text, l.wrappers, l.markers, l.sev(), l.rep) {
 		l.c.Add(f)
 	}
 }
@@ -383,8 +395,10 @@ var (
 	reShellFlag = regexp.MustCompile(`shell\s*=\s*True|shell:\s*true|"(ba|z)?sh",\s*"-c"|'(ba|z)?sh',\s*'-c'`)
 	reContainer = regexp.MustCompile(`\b(docker|podman|nerdctl)\b|containers\.run\s*\(`)
 	reAnnot     = regexp.MustCompile(`toolchain-verify:\s*sandboxed`)
-	reNormalize = regexp.MustCompile("[\"'`,\\[\\]{}()=:]+")
-	reSpaces    = regexp.MustCompile(`\s+`)
+	// sh -c in shell text, and the Go/JS form exec.Command("sh", "-c", ...).
+	reUnsafeLine = regexp.MustCompile(`(?i)\bshell\s*=\s*True\b|\b(ba|z|da)?sh\s+-c\b|["'](ba|z|da)?sh["']\s*,\s*["']-c["']|(^|[^\w.])(eval|exec)\s*\(`)
+	reNormalize  = regexp.MustCompile("[\"'`,\\[\\]{}()=:]+")
+	reSpaces     = regexp.MustCompile(`\s+`)
 
 	reNetNone  = regexp.MustCompile(`(?i)(--network|--net|network_mode|networkmode) none\b|(networkdisabled|network_disabled) true\b`)
 	reReadOnly = regexp.MustCompile(`(?i)--read-only\b|(read_only|readonlyrootfs) true\b`)
@@ -572,27 +586,33 @@ func classify(hit sinkHit, path string, raw, code, wrappers []string, why, sev s
 	lo, hi := max(0, i-8), min(len(code), i+16)
 	window := strings.Join(code[lo:hi], "\n")
 	f := findings.Finding{Path: path, Line: i + 1, Severity: findings.SevInfo}
-	if reAnnot.MatchString(raw[i]) || (i > 0 && reAnnot.MatchString(raw[i-1])) {
-		f.Rule, f.Message = "exec.annotated", call+" marked as sandboxed by a toolchain-verify:sandboxed comment (not verified)"
+	// The marker counts only on the call line, and only next to a wrapper
+	// named in the policy. shell=True, sh -c and eval on that line still fail,
+	// even when a wrapper appears on a neighbouring line.
+	unsafeLine := reUnsafeLine.MatchString(raw[i])
+	if reAnnot.MatchString(raw[i]) && wrapperIn(raw[i], wrappers) != "" && !unsafeLine {
+		f.Rule, f.Message = "exec.annotated", call+" marked as sandboxed by a toolchain-verify:sandboxed comment on the call line (not verified)"
 		return f
 	}
-	if w := wrapperIn(window, wrappers); w != "" {
-		f.Rule, f.Message = "exec.wrapped", call+" goes through approved wrapper "+w
-		return f
-	}
-	if sp.kind != "code" && reContainer.MatchString(window) {
-		missing, unsafe := hardening(normalize(window) + " " + fileNorm())
-		switch {
-		case unsafe:
-			f.Rule, f.Severity, f.Fix = "exec.weak-sandbox", findings.SevFail, fixText
-			f.Message = fmt.Sprintf("%s starts a container with --privileged, host namespaces or the Docker socket in a file that handles LLM output (%s)", call, why)
-		case len(missing) > 0:
-			f.Rule, f.Severity, f.Fix = "exec.weak-sandbox", sev, fixText
-			f.Message = fmt.Sprintf("%s starts a container without %s in a file that handles LLM output (%s)", call, strings.Join(missing, ", "), why)
-		default:
-			f.Rule, f.Message = "exec.wrapped", call+" runs in a hardened container"
+	if !unsafeLine {
+		if w := wrapperIn(window, wrappers); w != "" {
+			f.Rule, f.Message = "exec.wrapped", call+" goes through approved wrapper "+w
+			return f
 		}
-		return f
+		if sp.kind != "code" && reContainer.MatchString(window) {
+			missing, unsafe := hardening(normalize(window) + " " + fileNorm())
+			switch {
+			case unsafe:
+				f.Rule, f.Severity, f.Fix = "exec.weak-sandbox", findings.SevFail, fixText
+				f.Message = fmt.Sprintf("%s starts a container with --privileged, host namespaces or the Docker socket in a file that handles LLM output (%s)", call, why)
+			case len(missing) > 0:
+				f.Rule, f.Severity, f.Fix = "exec.weak-sandbox", sev, fixText
+				f.Message = fmt.Sprintf("%s starts a container without %s in a file that handles LLM output (%s)", call, strings.Join(missing, ", "), why)
+			default:
+				f.Rule, f.Message = "exec.wrapped", call+" runs in a hardened container"
+			}
+			return f
+		}
 	}
 	f.Rule, f.Severity, f.Fix = "exec.unwrapped", sev, fixText
 	what := "runs a process"
@@ -607,6 +627,115 @@ func classify(hit sinkHit, path string, raw, code, wrappers []string, why, sev s
 		f.Message += " [shell]"
 	}
 	return f
+}
+
+func (l *linter) noteDirty(dir string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	if l.dirty == nil {
+		l.dirty = map[string]map[string]bool{}
+	}
+	m := l.dirty[dir]
+	if m == nil {
+		m = map[string]bool{}
+		l.dirty[dir] = m
+	}
+	for _, n := range names {
+		if n != "" {
+			m[n] = true
+		}
+	}
+}
+
+func (l *linter) reportDirtyCalls() {
+	for _, path := range l.llmFiles {
+		names := l.dirty[filepath.Dir(path)]
+		if len(names) == 0 {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for i, ln := range strings.Split(string(data), "\n") {
+			if reAnnot.MatchString(ln) && wrapperIn(ln, l.wrappers) != "" && !reUnsafeLine.MatchString(ln) {
+				continue
+			}
+			for name := range names {
+				if !callsName(ln, name) || definesName(ln, name) {
+					continue
+				}
+				l.c.Add(findings.Finding{
+					Rule: "exec.unwrapped", Severity: l.sev(), Path: path, Line: i + 1, Fix: fixText,
+					Message: fmt.Sprintf("call of %s reaches a process or eval sink defined in the same directory, outside a hardened container", name),
+				})
+			}
+		}
+	}
+}
+
+var reFuncDef = map[lang]*regexp.Regexp{
+	langGo: regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(`),
+	langPy: regexp.MustCompile(`^(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(`),
+	langJS: regexp.MustCompile(`^(?:async\s+)?function\s+([A-Za-z_]\w*)\s*\(|^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*=`),
+	langSh: regexp.MustCompile(`^([A-Za-z_]\w*)\s*\(\)\s*\{`),
+}
+
+func dirtyNames(lg lang, lines []string) []string {
+	re := reFuncDef[lg]
+	if re == nil {
+		return nil
+	}
+	var names []string
+	var cur string
+	dirty := false
+	flush := func() {
+		if cur != "" && dirty {
+			names = append(names, cur)
+		}
+		cur, dirty = "", false
+	}
+	for _, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if m := re.FindStringSubmatch(t); m != nil {
+			flush()
+			cur = m[1]
+			if cur == "" && len(m) > 2 {
+				cur = m[2]
+			}
+		}
+		if cur != "" && lineHasSink(lg, ln) {
+			dirty = true
+		}
+	}
+	flush()
+	return names
+}
+
+func lineHasSink(lg lang, line string) bool {
+	if line == "" || len(line) > 4096 {
+		return false
+	}
+	for _, sp := range sinks[lg] {
+		if sp.re.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func callsName(line, name string) bool {
+	// A dot before the name is a method call (subprocess.run), not a call
+	// of the function that contains the sink.
+	return regexp.MustCompile(`(^|[^\w.])` + regexp.QuoteMeta(name) + `\s*\(`).MatchString(line)
+}
+
+func definesName(line, name string) bool {
+	t := strings.TrimSpace(line)
+	return strings.Contains(t, "func "+name) || strings.Contains(t, ") "+name+"(") ||
+		strings.Contains(t, "def "+name) || strings.Contains(t, "function "+name) ||
+		strings.Contains(t, "func (") && strings.Contains(t, name+"(")
 }
 
 func wrapperIn(window string, wrappers []string) string {

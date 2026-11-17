@@ -58,6 +58,15 @@ type Options struct {
 	Ignore       []string      // "rule" or "rule:path-glob"
 	StrictImages bool          // unscanned images/archives make the scan incomplete
 	Home         string        // refused as a root (default $HOME)
+	// OnlyFiles, when non-nil, scans just these paths (relative to root
+	// or absolute inside it) instead of walking the tree. The scanner
+	// still does not invoke git; a caller may pass `git diff --name-only`.
+	OnlyFiles []string
+	// DBMaxAgeDays is how old an IOC database `updated` date may be
+	// before policy.db-stale (default 45). Negative disables the check.
+	DBMaxAgeDays int
+	// Now overrides the clock for policy.db-stale (tests).
+	Now func() time.Time
 }
 
 func (o *Options) defaults() {
@@ -81,23 +90,14 @@ func (o *Options) defaults() {
 	}
 }
 
-// Finding is one observation. Path is relative to the scan root
+// Finding is the shared observation. Path is relative to the scan root
 // (slash-separated); Offset is a byte offset into the file; Evidence is an
 // escaped, redacted excerpt (never raw hidden text).
-type Finding struct {
-	Rule     string   `json:"rule"`
-	Severity string   `json:"severity"`
-	Path     string   `json:"path,omitempty"`
-	Line     int      `json:"line,omitempty"`
-	Offset   int      `json:"offset,omitempty"`
-	Message  string   `json:"message"`
-	Evidence string   `json:"evidence,omitempty"`
-	Decoded  string   `json:"decoded,omitempty"`
-	Signals  []string `json:"signals,omitempty"`
-	Fix      string   `json:"fix,omitempty"`
-	Refs     []string `json:"refs,omitempty"`
-	CWE      []string `json:"cwe,omitempty"`
-}
+type Finding = findings.Finding
+
+// ErrReparse is returned when a path is a reparse point (Windows symlink
+// or mount point). The scan must not follow it.
+var ErrReparse = errors.New("reparse point refused")
 
 // ControlFile is one entry of the control-file inventory.
 type ControlFile struct {
@@ -121,13 +121,14 @@ type Coverage struct {
 
 // Report is the result of Scan.
 type Report struct {
-	Root       string        `json:"root"`
-	Verdict    string        `json:"verdict"`
-	IOCVersion string        `json:"ioc_db,omitempty"`
-	Findings   []Finding     `json:"findings"`
-	Inventory  []ControlFile `json:"control_files"`
-	Coverage   Coverage      `json:"coverage"`
-	Ignored    int           `json:"ignored,omitempty"`
+	SchemaVersion int           `json:"schema_version"`
+	Root          string        `json:"root"`
+	Verdict       string        `json:"verdict"`
+	IOCVersion    string        `json:"ioc_db,omitempty"`
+	Findings      []Finding     `json:"findings"`
+	Inventory     []ControlFile `json:"control_files"`
+	Coverage      Coverage      `json:"coverage"`
+	Ignored       int           `json:"ignored,omitempty"`
 }
 
 // Counts per severity.
@@ -198,9 +199,12 @@ func Scan(root string, opt Options) (*Report, error) {
 	}
 	s := &scanner{opt: opt, root: real, seen: map[string]bool{}, present: map[string]bool{},
 		deadline: time.Now().Add(opt.Timeout),
-		rep: &Report{Root: real, IOCVersion: opt.IOCs.Version + " (" + opt.IOCs.Updated + ")",
+		rep: &Report{SchemaVersion: findings.SchemaVersion, Root: real, IOCVersion: opt.IOCs.Version + " (" + opt.IOCs.Updated + ")",
 			Coverage: Coverage{NotChecked: map[string]int{},
 				SemanticNote: "static scan: catches known patterns, hidden text and risky configs; it cannot prove the absence of a semantic prompt injection; images are not OCR-checked"}}}
+	if f, ok := findings.StaleDatabase("iocs.toml", opt.IOCs.Updated, s.now(), dbMaxAge(opt.DBMaxAgeDays)); ok {
+		s.add(f)
+	}
 	s.walk()
 	s.checkRefs()
 	if opt.Baseline != nil {
@@ -227,7 +231,64 @@ func (s *scanner) add(f Finding) {
 	s.rep.Findings = append(s.rep.Findings, f)
 }
 
+func (s *scanner) now() time.Time {
+	if s.opt.Now != nil {
+		return s.opt.Now()
+	}
+	return time.Now()
+}
+
+func dbMaxAge(days int) int {
+	if days == 0 {
+		return 45
+	}
+	return days
+}
+
+// walkOnly reads the paths in Options.OnlyFiles and nothing else.
+func (s *scanner) walkOnly() {
+	if len(s.opt.OnlyFiles) == 0 {
+		return
+	}
+	for _, raw := range s.opt.OnlyFiles {
+		raw = strings.TrimSpace(raw)
+		if raw == "" || strings.HasPrefix(raw, "#") {
+			continue
+		}
+		p := raw
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(s.root, filepath.FromSlash(p))
+		}
+		p = filepath.Clean(p)
+		rel, err := filepath.Rel(s.root, p)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			s.incomplete(raw + ": outside the scan root")
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		st, err := os.Lstat(p)
+		if err != nil {
+			s.incomplete(rel + ": " + err.Error())
+			continue
+		}
+		s.rep.Coverage.Files++
+		s.present[strings.ToLower(rel)] = true
+		switch {
+		case st.Mode()&os.ModeSymlink != 0:
+			s.symlink(p, rel)
+		case st.Mode().IsRegular():
+			s.file(p, rel)
+		default:
+			s.rep.Coverage.NotChecked["special-file"]++
+		}
+	}
+}
+
 func (s *scanner) walk() {
+	if s.opt.OnlyFiles != nil {
+		s.walkOnly()
+		return
+	}
 	err := filepath.WalkDir(s.root, func(p string, d fs.DirEntry, err error) error {
 		rel, _ := filepath.Rel(s.root, p)
 		rel = filepath.ToSlash(rel)
@@ -376,6 +437,11 @@ func (s *scanner) file(p, rel string) {
 	}
 	b, size, partial, err := s.readBounded(p, s.opt.MaxFileSize)
 	if err != nil {
+		if errors.Is(err, ErrReparse) {
+			s.incomplete(rel + ": reparse point; not followed")
+			s.add(Finding{Rule: "fs.reparse", Severity: SevWarn, Path: rel, Message: "path is a reparse point (symlink or mount); not opened"})
+			return
+		}
 		if kind != "" {
 			s.incomplete(rel + ": " + err.Error())
 			s.add(Finding{Rule: "scan.read-error", Severity: SevWarn, Path: rel, Message: "control file could not be read: " + err.Error()})

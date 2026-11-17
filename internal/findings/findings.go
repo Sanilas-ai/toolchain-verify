@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Severities.
@@ -16,16 +17,47 @@ const (
 	SevInfo = "info"
 )
 
-// Finding is one observation.
+// SchemaVersion is the JSON report schema. Extra finding fields are
+// omitempty so older consumers that only read rule, severity, path and
+// message keep working.
+const SchemaVersion = 1
+
+// Finding is one observation shared by every audit.
 type Finding struct {
 	Rule     string   `json:"rule"`
 	Severity string   `json:"severity"`
 	Path     string   `json:"path,omitempty"`
 	Line     int      `json:"line,omitempty"`
+	Offset   int      `json:"offset,omitempty"`
 	Message  string   `json:"message"`
+	Evidence string   `json:"evidence,omitempty"`
+	Decoded  string   `json:"decoded,omitempty"`
+	Signals  []string `json:"signals,omitempty"`
 	Fix      string   `json:"fix,omitempty"`
 	Refs     []string `json:"refs,omitempty"`
 	CWE      []string `json:"cwe,omitempty"`
+}
+
+// StaleDatabase reports policy.db-stale when updated (YYYY-MM-DD) is older
+// than maxDays. maxDays < 0 disables the check. A missing or unparseable
+// date is stale: a database we cannot date is not a PASS.
+func StaleDatabase(name, updated string, now time.Time, maxDays int) (Finding, bool) {
+	if maxDays < 0 {
+		return Finding{}, false
+	}
+	if maxDays == 0 {
+		maxDays = 45
+	}
+	t, err := time.Parse("2006-01-02", strings.TrimSpace(updated))
+	if err != nil || now.Sub(t) > time.Duration(maxDays)*24*time.Hour {
+		msg := name + " updated " + updated + " is older than " + itoa(maxDays) + " days"
+		if err != nil {
+			msg = name + " has no parseable updated date (" + updated + ")"
+		}
+		return Finding{Rule: "policy.db-stale", Severity: SevWarn, Path: name,
+			Message: msg, Fix: "refresh the embedded database or set db_max_age_days"}, true
+	}
+	return Finding{}, false
 }
 
 // Location is Path[:Line].
