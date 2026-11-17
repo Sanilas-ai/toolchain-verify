@@ -55,17 +55,24 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 		s.add(Finding{Rule: "gha.write-all", Severity: SevWarn, Path: rel, Line: p.Line, Message: "workflow grants permissions: write-all to GITHUB_TOKEN"})
 	}
 	type jobSteps struct {
-		cond  string
-		steps []*yaml.Node
+		cond       string
+		steps      []*yaml.Node
+		privileged bool
 	}
 	var all []jobSteps
+	var unpinned []*unpinnedUse
+	untrusted, _ := agentTriggers(wf.on)
+	wfPerms := ymap(doc, "permissions")
 	if jobs := ymap(doc, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
 		for i := 1; i < len(jobs.Content); i += 2 {
 			job := jobs.Content[i]
+			js := jobSteps{privileged: len(untrusted) > 0 && jobHoldsCredentials(job, wfPerms)}
 			if u := ymap(job, "uses"); u != nil { // reusable workflow
-				s.checkUses(rel, u)
+				if up := s.checkUses(rel, u); up != nil {
+					up.privileged = js.privileged
+					unpinned = append(unpinned, up)
+				}
 			}
-			js := jobSteps{}
 			if c := ymap(job, "if"); c != nil {
 				js.cond = c.Value
 			}
@@ -91,7 +98,10 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 			}
 			s.checkoutSubmodules(rel, st)
 			if u := ymap(st, "uses"); u != nil {
-				s.checkUses(rel, u)
+				if up := s.checkUses(rel, u); up != nil {
+					up.privileged = js.privileged
+					unpinned = append(unpinned, up)
+				}
 				if strings.HasPrefix(strings.ToLower(u.Value), "actions/checkout@") {
 					if with := ymap(st, "with"); with != nil {
 						if ref := ymap(with, "ref"); ref != nil && prHeadRefRe.MatchString(ref.Value) {
@@ -129,9 +139,27 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 			}
 		}
 	}
+	s.reportUnpinned(rel, unpinned, untrusted)
 	if wf.on["pull_request_target"] && !checkedOutPR {
 		s.add(Finding{Rule: "gha.pull-request-target", Severity: SevInfo, Path: rel, Message: "pull_request_target runs with secrets for fork PRs; keep it free of PR code checkouts"})
 	}
+}
+
+// jobHoldsCredentials: the job references a secret or has a write grant
+// (its own permissions, else the workflow's).
+func jobHoldsCredentials(job, wfPerms *yaml.Node) bool {
+	var all []*yaml.Node
+	scalars(job, &all)
+	for _, n := range all {
+		if secretRefRe.MatchString(n.Value) {
+			return true
+		}
+	}
+	perms := ymap(job, "permissions")
+	if perms == nil {
+		perms = wfPerms
+	}
+	return len(writePerms(perms)) > 0
 }
 
 func (s *scanner) checkRunInjection(rel string, run *yaml.Node, where string) {
@@ -143,29 +171,90 @@ func (s *scanner) checkRunInjection(rel string, run *yaml.Node, where string) {
 	}
 }
 
-func (s *scanner) checkUses(rel string, u *yaml.Node) {
+// unpinnedUse is one remote action reference that is not pinned to a
+// full commit SHA.
+type unpinnedUse struct {
+	ref        string
+	line       int
+	firstParty bool
+	noRef      bool
+	privileged bool // job with secrets/write token under an untrusted trigger
+}
+
+// firstPartyAction: actions/* and github/* are published by GitHub.
+func firstPartyAction(ref string) bool {
+	l := strings.ToLower(ref)
+	return strings.HasPrefix(l, "actions/") || strings.HasPrefix(l, "github/")
+}
+
+// checkUses inspects one uses: value. Images are reported directly;
+// unpinned remote actions are returned for per-file aggregation.
+func (s *scanner) checkUses(rel string, u *yaml.Node) *unpinnedUse {
 	v := strings.TrimSpace(u.Value)
 	if v == "" || strings.HasPrefix(v, "./") {
-		return // local action: versioned with the repo
+		return nil // local action: versioned with the repo
 	}
 	if strings.HasPrefix(v, "docker://") {
 		if !strings.Contains(v, "@sha256:") {
 			s.add(Finding{Rule: "gha.unpinned-image", Severity: SevWarn, Path: rel, Line: u.Line, Evidence: escapeEvidence(v, 120),
 				Message: "container action not pinned by digest"})
 		}
-		return
+		return nil
 	}
 	at := strings.LastIndex(v, "@")
 	if at < 0 {
-		s.add(Finding{Rule: "gha.unpinned-action", Severity: SevWarn, Path: rel, Line: u.Line, Evidence: escapeEvidence(v, 120), Message: "action without a ref"})
-		return
+		return &unpinnedUse{ref: v, line: u.Line, firstParty: firstPartyAction(v), noRef: true}
 	}
 	if !shaRefRe.MatchString(v[at+1:]) {
-		s.add(Finding{Rule: "gha.unpinned-action", Severity: SevWarn, Path: rel, Line: u.Line, Evidence: escapeEvidence(v, 120),
-			Message: "remote action pinned to a mutable tag/branch; tags can be moved to a malicious commit (tj-actions, March 2025)",
-			Fix:     "pin to the full 40-character commit SHA (keep the tag in a comment)",
-			Refs:    []string{"https://www.stepsecurity.io/blog/harden-runner-detection-tj-actions-changed-files-action-is-compromised"}})
+		return &unpinnedUse{ref: v, line: u.Line, firstParty: firstPartyAction(v)}
 	}
+	return nil
+}
+
+// reportUnpinned emits gha.unpinned-action: one aggregated finding per
+// workflow file (warn when a third-party action is unpinned, info when only
+// GitHub's own actions/* and github/* are), plus a separate warn for each
+// unpinned third-party action in a privileged job.
+func (s *scanner) reportUnpinned(rel string, uses []*unpinnedUse, untrusted []string) {
+	var agg []*unpinnedUse
+	for _, u := range uses {
+		if u.privileged && !u.firstParty {
+			msg := "third-party action pinned to a mutable tag/branch in a job that holds secrets or a write token under an untrusted trigger (" + strings.Join(untrusted, ", ") + "); a moved tag runs attacker code with them (tj-actions, March 2025)"
+			if u.noRef {
+				msg = "third-party action without a ref in a job that holds secrets or a write token under an untrusted trigger (" + strings.Join(untrusted, ", ") + ")"
+			}
+			s.add(Finding{Rule: "gha.unpinned-action", Severity: SevWarn, Path: rel, Line: u.line, Evidence: escapeEvidence(u.ref, 120), Message: msg,
+				Fix:  "pin to the full 40-character commit SHA (keep the tag in a comment)",
+				Refs: []string{"https://www.stepsecurity.io/blog/harden-runner-detection-tj-actions-changed-files-action-is-compromised"}})
+			continue
+		}
+		agg = append(agg, u)
+	}
+	if len(agg) == 0 {
+		return
+	}
+	third, first := 0, 0
+	seen := map[string]bool{}
+	var list []string
+	for _, u := range agg {
+		if u.firstParty {
+			first++
+		} else {
+			third++
+		}
+		if !seen[u.ref] {
+			seen[u.ref] = true
+			list = append(list, u.ref)
+		}
+	}
+	sev := SevInfo
+	if third > 0 {
+		sev = SevWarn
+	}
+	s.add(Finding{Rule: "gha.unpinned-action", Severity: sev, Path: rel, Line: agg[0].line, Evidence: escapeEvidence(strings.Join(list, ", "), 400),
+		Message: fmt.Sprintf("%d uses: of remote actions not pinned to a commit SHA (%d third-party, %d first-party actions/*, github/*); tags can be moved to a malicious commit (tj-actions, March 2025)", len(agg), third, first),
+		Fix:     "pin to the full 40-character commit SHA (keep the tag in a comment); Dependabot/Renovate can keep SHA pins current",
+		Refs:    []string{"https://www.stepsecurity.io/blog/harden-runner-detection-tj-actions-changed-files-action-is-compromised"}})
 }
 
 // yamlDupKeys reports duplicate mapping keys (yaml.v3 accepts them in Node

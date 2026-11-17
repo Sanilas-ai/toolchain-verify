@@ -231,3 +231,81 @@ jobs:
 		}
 	}
 }
+
+// gha.unpinned-action: one finding per workflow file; first-party only is
+// info; a third-party tag in a privileged job is a separate warn.
+func TestUnpinnedAggregation(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, ".github/workflows/ci.yml", `on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - uses: github/codeql-action/init@v3
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: example-org/setup-tool@v2
+      - uses: example-org/lint
+`)
+	write(t, root, ".github/workflows/first.yml", `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@main
+`)
+	write(t, root, ".github/workflows/prt.yml", `on: pull_request_target
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v5
+      - uses: example-org/comment-action@v1
+        with:
+          token: ${{ secrets.EXAMPLE_BOT_TOKEN }}
+`)
+	rep := scan(t, root, Options{})
+	count := func(path string) (n int, fs []Finding) {
+		for _, f := range rep.Findings {
+			if f.Rule == "gha.unpinned-action" && f.Path == path {
+				n++
+				fs = append(fs, f)
+			}
+		}
+		return
+	}
+	if n, fs := count(".github/workflows/ci.yml"); n != 1 || fs[0].Severity != SevWarn ||
+		!strings.Contains(fs[0].Message, "6 uses:") || !strings.Contains(fs[0].Message, "2 third-party") ||
+		!strings.Contains(fs[0].Evidence, "example-org/setup-tool@v2") || fs[0].Line != 8 {
+		t.Errorf("ci.yml: %d %+v", n, fs)
+	}
+	if n, fs := count(".github/workflows/first.yml"); n != 1 || fs[0].Severity != SevInfo {
+		t.Errorf("first.yml: %d %+v", n, fs)
+	}
+	n, fs := count(".github/workflows/prt.yml")
+	if n != 2 {
+		t.Fatalf("prt.yml: want aggregated info + privileged warn, got %d %+v", n, fs)
+	}
+	var warned, info bool
+	for _, f := range fs {
+		if f.Severity == SevWarn && f.Evidence == "example-org/comment-action@v1" && strings.Contains(f.Message, "pull_request_target") {
+			warned = true
+		}
+		if f.Severity == SevInfo && f.Evidence == "actions/labeler@v5" {
+			info = true
+		}
+	}
+	if !warned || !info {
+		t.Errorf("prt.yml: %+v", fs)
+	}
+}
