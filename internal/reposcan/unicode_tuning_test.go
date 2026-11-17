@@ -75,3 +75,23 @@ func TestNoSpaceScriptZWSP(t *testing.T) {
 		t.Fatalf("ZWSP between Thai and Latin must still count: %+v", runs)
 	}
 }
+
+// Snapshot files (insta *.snap, jest __snapshots__) are test data.
+func TestSnapshotsAreTestData(t *testing.T) {
+	root := t.TempDir()
+	zw := strings.Repeat("a\u200Bb ", 10) // 10 single ZWSPs: warn in code, info in test data
+	write(t, root, "crates/linter/src/rules/pylint/snapshots/linter__tests__zero-width.py.snap", "---\nsource: x\n---\n"+zw+"\n")
+	write(t, root, "web/src/__snapshots__/app.test.tsx.snap", "exports[`x`] = `\"a\u202Eb\"`;\n")
+	write(t, root, "pkg/out.snap", "x = \u202E\n")
+	write(t, root, "crates/linter/src/snapshots/broken/package.json", "{\"name\": \"x\",\n")
+	write(t, root, "src/strip.py", "S = '"+zw+"'\n") // code keeps severity
+	rep := scan(t, root, Options{})
+	mustFind(t, rep, "unicode.zero-width", "crates/linter/src/rules/pylint/snapshots/linter__tests__zero-width.py.snap", SevInfo)
+	mustFind(t, rep, "unicode.bidi-control", "web/src/__snapshots__/app.test.tsx.snap", SevInfo)
+	mustFind(t, rep, "unicode.bidi-control", "pkg/out.snap", SevInfo)
+	mustFind(t, rep, "config.parse-error", "crates/linter/src/snapshots/broken/package.json", SevInfo)
+	mustFind(t, rep, "unicode.zero-width", "src/strip.py", SevWarn)
+	if len(rep.Coverage.Incomplete) != 0 || len(rep.Coverage.UnparsedFixtures) != 1 {
+		t.Errorf("coverage: %v %v", rep.Coverage.Incomplete, rep.Coverage.UnparsedFixtures)
+	}
+}

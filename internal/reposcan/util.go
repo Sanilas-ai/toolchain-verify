@@ -22,14 +22,16 @@ func isTestishPath(rel string) bool {
 		switch p {
 		case "test", "tests", "testing", "testdata", "fixtures", "fixture",
 			"__tests__", "spec", "specs", "wpt", "web-platform-tests",
-			"expectations", "golden", "goldens", "corpus", "samples":
+			"expectations", "golden", "goldens", "corpus", "samples",
+			"snapshots", "__snapshots__", "snapshot":
 			return true
 		}
 	}
 	base := path.Base(rel)
 	if strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, ".test.js") ||
 		strings.HasSuffix(base, ".test.ts") || strings.HasSuffix(base, ".spec.ts") ||
-		strings.HasSuffix(base, ".spec.js") || strings.Contains(base, ".test.") {
+		strings.HasSuffix(base, ".spec.js") || strings.Contains(base, ".test.") ||
+		strings.HasSuffix(base, ".snap") || strings.HasSuffix(base, ".snap.new") {
 		return true
 	}
 	return false
