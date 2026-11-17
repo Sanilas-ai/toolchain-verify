@@ -6,6 +6,39 @@ this project uses [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (scan tuning after the 2026-11-16 mass scan and manual review)
+- `ci.agent-publish-token` fires only when the job actually runs an agent:
+  `uses:` of a known agent action, or a shell command whose command word
+  (after env/sudo/timeout/npx/uvx/pnpm dlx/pipx run/uv run/bash -c/
+  python -m) is an agent CLI. Image names, npm package names in publish
+  steps, Co-authored-by trailers, comments, echo strings, heredoc bodies and
+  setup-only calls (`--version`, `login`, `mcp`) no longer count.
+- `ci.agent-publish-token` is graded: **fail** for an untrusted trigger
+  (issue_comment, issues, pull_request_target, pull_request_review*,
+  discussion*, workflow_run) without an author_association/actor filter and
+  without a built-in write check, or `allowed_non_write_users: "*"`;
+  **warn** when gated to OWNER/MEMBER/COLLABORATOR, when the only protection
+  is inside the action (claude-code-action write-permission check), or for
+  other triggers with publish secrets / contents|packages write; **info**
+  for trusted triggers only (dispatch, schedule, push, release) with just
+  `id-token: write` and read-only contents.
+- `gha.unpinned-action`: one finding per workflow file (count, actions in
+  evidence); warn if a third-party action is unpinned, info if only
+  `actions/*` / `github/*`. A third-party tag in a job with secrets or a
+  write token under an untrusted trigger stays a separate warn.
+- `unicode.bidi-control`: one finding per file; docs, translation catalogs
+  (`.po`/`.mo`/`.xliff`, `locale/`, `i18n/`, `translations/`) and test
+  fixture data are info. `unicode.zero-width`: info there unless a run of
+  4+; ZWSP word breaks in Khmer/Thai/Lao/Myanmar/Tibetan/CJK are not
+  counted. Control files, workflows and code keep their severity.
+- `agent.recursive-clone`: one finding per file; the message states that
+  the risk is real only where git is older than 2.56.1.
+- Broken structured files inside test/fixture trees (invalid package.json
+  fixtures in node, bun, deno, eslint, trivy) are info and listed in
+  `coverage.unparsed_fixtures` instead of making the scan INCOMPLETE;
+  `--strict-coverage` keeps them INCOMPLETE. Empty package.json/JSON configs
+  are skipped.
+
 ### Added
 - Session trace (`trace`, `trace watch`) reads a Claude, Codex, or Cursor
   journal and fails on a shell call the exec policy rejects, a credential

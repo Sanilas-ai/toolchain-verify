@@ -443,13 +443,17 @@ This finds the following:
 - risky MCP and agent configs, editor auto-run tasks and unsafe GitHub workflows
 - package install hooks
 - known IOCs, such as the strutil-core / pystr-codec campaign
-- `agent.recursive-clone` (warn, CWE-829/CWE-59): `git clone --recurse-submodules` / `--recursive`,
+- `agent.recursive-clone` (warn, CWE-829/CWE-59, one finding per file): `git clone --recurse-submodules` / `--recursive`,
   `git submodule update --recursive` or `actions/checkout` `submodules: recursive` in agent
-  instructions, rules, scripts, Makefiles and workflows (git CVE-2026-111760)
-- `ci.agent-publish-token` (fail, CWE-269/CWE-522): a workflow job runs an AI coding agent
-  (Codex, Claude Code, Cursor agent, aider, OpenHands, Gemini CLI, goose, opencode) while
+  instructions, rules, scripts, Makefiles and workflows (git CVE-2026-111760; real risk only where git < 2.56.1)
+- `ci.agent-publish-token` (fail/warn/info, CWE-269/CWE-522): a workflow job runs an AI coding agent
+  (Codex, Claude Code, Cursor agent, aider, OpenHands, Gemini CLI, goose, opencode; an actual
+  `uses:`/command invocation, not a name in an image or package) while
   publish secrets (`NPM_TOKEN`, `NODE_AUTH_TOKEN`, PyPI, cargo, …) or `id-token`/`contents`/`packages: write`
-  are in reach of the same job ([Depi, Backdooring Codex](https://depi.security/blog/20261111-backdooring-codex/))
+  are in reach of the same job ([Depi, Backdooring Codex](https://depi.security/blog/20261111-backdooring-codex/)).
+  fail: untrusted trigger (issue_comment, issues, pull_request_target, …) with no author_association
+  filter and no built-in write check; warn: gated, or protected only inside the action; info: trusted
+  triggers only with just `id-token: write`
 
 **Agent tool update cooldown** (`agent.tool-update-cooldown`, guidance): do not auto-update
 coding agents (Codex CLI, Claude Code, Cursor agent, MCP servers) the moment a release drops.
@@ -750,10 +754,13 @@ toolchain-verify trace watch session.jsonl
 - небезопасные GitHub workflows;
 - хуки установки пакетов;
 - известные IOC;
-- `agent.recursive-clone` (warn): `git clone --recurse-submodules`/`--recursive` и
-  `submodule update --recursive` в инструкциях агентов, скриптах и workflow;
-- `ci.agent-publish-token` (fail): ИИ-агент запускается в том же job, где доступны секреты
-  публикации или `id-token`/`contents: write`.
+- `agent.recursive-clone` (warn, одна находка на файл): `git clone --recurse-submodules`/`--recursive` и
+  `submodule update --recursive` в инструкциях агентов, скриптах и workflow (реальный риск при git < 2.56.1);
+- `ci.agent-publish-token` (fail/warn/info): ИИ-агент действительно запускается (`uses:` или команда,
+  а не имя в образе или пакете) в том же job, где доступны секреты публикации или
+  `id-token`/`contents: write`. fail — недоверенный триггер без фильтра author_association и без
+  встроенной проверки прав; warn — есть фильтр или защита только внутри action; info — только
+  доверенные триггеры и лишь `id-token: write`.
 
 Агентские инструменты (Codex CLI, Claude Code, Cursor agent, MCP-серверы) не стоит обновлять
 сразу после релиза: закрепите версию и переходите на новую примерно через 48 часов
