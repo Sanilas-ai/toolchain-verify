@@ -19,7 +19,6 @@ var (
 	recursiveCloneRe = regexp.MustCompile(`(?i)\bgit\s+(?:-c\s+\S+\s+)*clone\b[^\n;&|]*\s--(?:recurse-submodules|recursive)\b|\bgit\s+submodule\s+update\b[^\n;&|]*\s--recursive\b`)
 
 	agentUsesRe = regexp.MustCompile(`(?i)^(openai/codex-action|anthropics/claude-code-action|anthropics/claude-code-base-action|google-github-actions/run-gemini-cli|cursor/[^@]*agent[^@]*|all-hands-ai/openhands[^@]*|openhands[^@]*|block/goose[^@]*|sst/opencode[^@]*|paul-gauthier/aider[^@]*|aider-ai/[^@]*|github/copilot-[^@]*agent[^@]*)@`)
-	agentRunRe  = regexp.MustCompile(`(?i)(^|[\s;&|(/])(codex(\s+exec|\s+-|\s+--|\s*$)|@openai/codex|claude(\s+-p|\s+--print|\s+code)|@anthropic-ai/claude-code|claude-code|cursor-agent|aider(\s|$)|aider-chat|openhands|gemini\s+-p|@google/gemini-cli|goose\s+run|opencode\s+run)`)
 	secretRefRe = regexp.MustCompile(`\bsecrets\.([A-Za-z0-9_]+)`)
 	publishRe   = regexp.MustCompile(`(?i)^(npm_token|node_auth_token|npm_auth_token|.*pypi.*|twine_.*|cargo_registry_token|gem_host_api_key|rubygems_.*|nuget_.*|ossrh_.*|sonatype_.*|maven_.*|docker(hub)?_(token|password)|gh_pat|.*publish.*|.*release_token.*|.*deploy_key.*|gpg_private_key|signing_key|vsce_pat|ovsx_token|jsr_token)$`)
 )
@@ -107,8 +106,8 @@ func (s *scanner) checkAgentPublishJobs(rel string, doc *yaml.Node) {
 					break
 				}
 				if r := ymap(step, "run"); r != nil {
-					if m := agentRunRe.FindString(r.Value); m != "" {
-						agent, agentLine = strings.TrimSpace(strings.TrimLeft(m, " ;&|(/")), r.Line
+					if m := agentInvocation(r.Value); m != "" {
+						agent, agentLine = m, r.Line
 						break
 					}
 				}
