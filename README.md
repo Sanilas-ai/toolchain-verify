@@ -454,6 +454,9 @@ This finds the following:
   fail: untrusted trigger (issue_comment, issues, pull_request_target, …) with no author_association
   filter and no built-in write check; warn: gated, or protected only inside the action; info: trusted
   triggers only with just `id-token: write`
+- `ci.agent-untrusted-trigger` (info): the agent runs on an untrusted trigger (issue_comment, issues,
+  pull_request_target, …) with read-only rights and no publish secrets but without an author_association
+  filter; prompt injection can still steer its output/comments and spend the API key
 
 **Agent tool update cooldown** (`agent.tool-update-cooldown`, guidance): do not auto-update
 coding agents (Codex CLI, Claude Code, Cursor agent, MCP servers) the moment a release drops.
@@ -760,7 +763,10 @@ toolchain-verify trace watch session.jsonl
   а не имя в образе или пакете) в том же job, где доступны секреты публикации или
   `id-token`/`contents: write`. fail — недоверенный триггер без фильтра author_association и без
   встроенной проверки прав; warn — есть фильтр или защита только внутри action; info — только
-  доверенные триггеры и лишь `id-token: write`.
+  доверенные триггеры и лишь `id-token: write`;
+- `ci.agent-untrusted-trigger` (info): агент запускается на недоверенном триггере только с правами
+  на чтение и без секретов публикации, но без фильтра author_association; промпт-инъекция всё ещё
+  влияет на его ответы/комментарии и расход API-ключа.
 
 Агентские инструменты (Codex CLI, Claude Code, Cursor agent, MCP-серверы) не стоит обновлять
 сразу после релиза: закрепите версию и переходите на новую примерно через 48 часов

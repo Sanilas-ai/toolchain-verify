@@ -38,6 +38,12 @@ this project uses [SemVer](https://semver.org/).
   `coverage.unparsed_fixtures` instead of making the scan INCOMPLETE;
   `--strict-coverage` keeps them INCOMPLETE. Empty package.json/JSON configs
   are skipped.
+- New `ci.agent-untrusted-trigger` (info): an agent really runs on an
+  untrusted trigger with read-only permissions and no publish secrets and
+  without an author_association/actor filter; prompt injection can still
+  steer its output/comments and spend the API key.
+- `snapshots/`, `__snapshots__/` and `*.snap` (insta, jest) count as test
+  data for `unicode.*` and `coverage.unparsed_fixtures`.
 
 ### Added
 - Session trace (`trace`, `trace watch`) reads a Claude, Codex, or Cursor
