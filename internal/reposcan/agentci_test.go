@@ -20,18 +20,39 @@ func TestRecursiveClone(t *testing.T) {
 	if f.Line != 3 || len(f.CWE) == 0 || f.CWE[0] != "CWE-829" {
 		t.Errorf("AGENTS.md: %+v", f)
 	}
+	// Aggregated per file since scan-tuning-1117 (was one finding per match).
 	n := 0
 	for _, f := range rep.Findings {
 		if f.Rule == "agent.recursive-clone" && f.Path == "scripts/bootstrap.sh" {
 			n++
+			if f.Line != 3 || !strings.Contains(f.Message, "2 recursive submodule clones (lines 3, 4)") || !strings.Contains(f.Message, "2.56.1") {
+				t.Errorf("bootstrap.sh: %+v", f)
+			}
 		}
 	}
-	if n != 2 {
-		t.Errorf("bootstrap.sh: want 2, got %d\n%s", n, dump(rep))
+	if n != 1 {
+		t.Errorf("bootstrap.sh: want 1 aggregated, got %d\n%s", n, dump(rep))
 	}
 	mustFind(t, rep, "agent.recursive-clone", ".cursor/rules/deps.mdc", SevWarn)
 	mustFind(t, rep, "agent.recursive-clone", "Makefile", SevWarn)
 	mustFind(t, rep, "agent.recursive-clone", ".github/workflows/ci.yml", SevWarn)
+
+	// Several recursive checkouts in one workflow: one finding.
+	multi := t.TempDir()
+	write(t, multi, ".github/workflows/build.yml", "on: push\npermissions:\n  contents: read\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n        with:\n          submodules: recursive\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n        with:\n          submodules: recursive\n")
+	mrep := scan(t, multi, Options{})
+	cnt := 0
+	for _, f := range mrep.Findings {
+		if f.Rule == "agent.recursive-clone" {
+			cnt++
+			if !strings.Contains(f.Message, "2 actions/checkout steps") || !strings.Contains(f.Message, "older than 2.56.1") {
+				t.Errorf("build.yml: %+v", f)
+			}
+		}
+	}
+	if cnt != 1 {
+		t.Errorf("build.yml: want 1, got %d%s", cnt, dump(mrep))
+	}
 
 	benign := t.TempDir()
 	write(t, benign, "AGENTS.md", "Clone with `git clone --no-recurse-submodules URL`, then `git submodule update --init vendor/lib`.\n")

@@ -88,6 +88,7 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 		}
 	}
 	checkedOutPR := false
+	var submoduleLines []int
 	for _, js := range all {
 		// A job gated to same-repository heads (not forks) does not run
 		// attacker code even under a privileged trigger.
@@ -96,7 +97,9 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 			if c := ymap(st, "if"); c != nil && sameRepoGuardRe.MatchString(c.Value) {
 				sameRepo = true
 			}
-			s.checkoutSubmodules(rel, st)
+			if l := checkoutSubmodules(st); l > 0 {
+				submoduleLines = append(submoduleLines, l)
+			}
 			if u := ymap(st, "uses"); u != nil {
 				if up := s.checkUses(rel, u); up != nil {
 					up.privileged = js.privileged
@@ -140,6 +143,7 @@ func (s *scanner) scanWorkflow(rel string, b []byte) {
 		}
 	}
 	s.reportUnpinned(rel, unpinned, untrusted)
+	s.reportCheckoutSubmodules(rel, submoduleLines)
 	if wf.on["pull_request_target"] && !checkedOutPR {
 		s.add(Finding{Rule: "gha.pull-request-target", Severity: SevInfo, Path: rel, Message: "pull_request_target runs with secrets for fork PRs; keep it free of PR code checkouts"})
 	}

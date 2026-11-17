@@ -1,6 +1,7 @@
 package reposcan
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -23,33 +24,71 @@ var (
 	publishRe   = regexp.MustCompile(`(?i)^(npm_token|node_auth_token|npm_auth_token|.*pypi.*|twine_.*|cargo_registry_token|gem_host_api_key|rubygems_.*|nuget_.*|ossrh_.*|sonatype_.*|maven_.*|docker(hub)?_(token|password)|gh_pat|.*publish.*|.*release_token.*|.*deploy_key.*|gpg_private_key|signing_key|vsce_pat|ovsx_token|jsr_token)$`)
 )
 
-// scanRecursiveClone reports recursive submodule clones in files an agent
-// reads as instructions or runs.
-func (s *scanner) scanRecursiveClone(rel string, b []byte) {
-	text := string(b)
-	for _, loc := range recursiveCloneRe.FindAllStringIndex(text, 8) {
-		line := 1 + strings.Count(text[:loc[0]], "\n")
-		s.add(Finding{Rule: "agent.recursive-clone", Severity: SevWarn, Path: rel, Line: line, Evidence: escapeEvidence(text[loc[0]:loc[1]], 120), CWE: []string{"CWE-829", "CWE-59"},
-			Message: "recursive submodule clone: with git < 2.56.1 (CVE-2026-111760) a malicious repository runs code during the clone; agents follow such instructions on untrusted repos",
-			Fix:     "clone without submodules (git clone --no-recurse-submodules, -c protocol.file.allow=never), review .gitmodules, then init only the submodules you trust; upgrade git to 2.56.1",
-			Refs:    []string{"https://github.com/git/git/security/advisories/GHSA-vp2w-7xxj-jvxr"}})
+const recursiveCloneRisk = "the risk is real only where the cloning git is older than 2.56.1 (CVE-2026-111760: a malicious repository runs code during a recursive clone); agents follow such instructions on untrusted repos"
+
+// lineList renders up to five line numbers.
+func lineList(lines []int) string {
+	var out []string
+	for i, l := range lines {
+		if i == 5 {
+			out = append(out, "…")
+			break
+		}
+		out = append(out, fmt.Sprint(l))
 	}
+	return strings.Join(out, ", ")
 }
 
-// checkoutSubmodules reports actions/checkout with submodules: recursive.
-func (s *scanner) checkoutSubmodules(rel string, st *yaml.Node) {
+// scanRecursiveClone reports recursive submodule clones in files an agent
+// reads as instructions or runs: one finding per file.
+func (s *scanner) scanRecursiveClone(rel string, b []byte) {
+	text := string(b)
+	locs := recursiveCloneRe.FindAllStringIndex(text, -1)
+	if len(locs) == 0 {
+		return
+	}
+	var lines []int
+	for _, loc := range locs {
+		lines = append(lines, 1+strings.Count(text[:loc[0]], "\n"))
+	}
+	msg := "recursive submodule clone"
+	if len(locs) > 1 {
+		msg = fmt.Sprintf("%d recursive submodule clones (lines %s)", len(locs), lineList(lines))
+	}
+	s.add(Finding{Rule: "agent.recursive-clone", Severity: SevWarn, Path: rel, Line: lines[0], Evidence: escapeEvidence(text[locs[0][0]:locs[0][1]], 120), CWE: []string{"CWE-829", "CWE-59"},
+		Message: msg + ": " + recursiveCloneRisk,
+		Fix:     "update git to 2.56.1 or later wherever this runs (CI runners, agent sandboxes, developer machines), or do not clone untrusted repositories recursively: git clone --no-recurse-submodules (-c protocol.file.allow=never), review .gitmodules, then init only the submodules you trust",
+		Refs:    []string{"https://github.com/git/git/security/advisories/GHSA-vp2w-7xxj-jvxr"}})
+}
+
+// checkoutSubmodules returns the line of actions/checkout with
+// submodules: recursive, or 0.
+func checkoutSubmodules(st *yaml.Node) int {
 	u := ymap(st, "uses")
 	if u == nil || !strings.HasPrefix(strings.ToLower(u.Value), "actions/checkout@") {
-		return
+		return 0
 	}
 	if with := ymap(st, "with"); with != nil {
 		if sm := ymap(with, "submodules"); sm != nil && strings.EqualFold(sm.Value, "recursive") {
-			s.add(Finding{Rule: "agent.recursive-clone", Severity: SevWarn, Path: rel, Line: sm.Line, Evidence: "submodules: recursive", CWE: []string{"CWE-829", "CWE-59"},
-				Message: "actions/checkout with submodules: recursive runs a recursive submodule clone (CVE-2026-111760 on runners with git < 2.56.1)",
-				Fix:     "use submodules: false (or true for one level of trusted submodules) and update the runner's git",
-				Refs:    []string{"https://github.com/git/git/security/advisories/GHSA-vp2w-7xxj-jvxr"}})
+			return sm.Line
 		}
 	}
+	return 0
+}
+
+// reportCheckoutSubmodules: one finding per workflow file.
+func (s *scanner) reportCheckoutSubmodules(rel string, lines []int) {
+	if len(lines) == 0 {
+		return
+	}
+	msg := "actions/checkout with submodules: recursive"
+	if len(lines) > 1 {
+		msg = fmt.Sprintf("%d actions/checkout steps with submodules: recursive (lines %s)", len(lines), lineList(lines))
+	}
+	s.add(Finding{Rule: "agent.recursive-clone", Severity: SevWarn, Path: rel, Line: lines[0], Evidence: "submodules: recursive", CWE: []string{"CWE-829", "CWE-59"},
+		Message: msg + " runs a recursive submodule clone; " + recursiveCloneRisk + " (GitHub-hosted runners get patched git; self-hosted runners and containers may not)",
+		Fix:     "make sure the runner's git is 2.56.1 or later, or use submodules: false (or true for one level of trusted submodules)",
+		Refs:    []string{"https://github.com/git/git/security/advisories/GHSA-vp2w-7xxj-jvxr"}})
 }
 
 // scalars collects every scalar below n.
