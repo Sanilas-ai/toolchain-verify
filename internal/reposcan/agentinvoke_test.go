@@ -9,17 +9,17 @@ import "testing"
 
 func TestAgentInvocation(t *testing.T) {
 	yes := map[string]string{
-		`codex exec --full-auto "fix the build"`:                  "codex exec",
-		`npx -y @openai/codex@latest exec "triage"`:               "codex exec",
-		`NODE_OPTIONS=--max-old-space-size=4096 claude -p "hi"`:   "claude -p",
-		`npx --yes @anthropic-ai/claude-code --print "summarize"`: "claude --print",
+		`codex exec --full-auto "fix the build"`:                   "codex exec",
+		`npx -y @openai/codex@latest exec "triage"`:                "codex exec",
+		`NODE_OPTIONS=--max-old-space-size=4096 claude -p "hi"`:    "claude -p",
+		`npx --yes @anthropic-ai/claude-code --print "summarize"`:  "claude --print",
 		"set -e\nbash -c 'gemini -p \"review\"'":                   "gemini -p",
 		"pip install aider-chat\naider --yes --message \"lint\"":   "aider --yes",
-		`python3 -m openhands.core.main -t "solve the issue"`:     "python -m openhands.core.main",
-		`timeout 600 openhands --headless -t "$TASK"`:             "openhands --headless",
-		`uvx --from openhands-ai openhands --headless`:            "openhands --headless",
-		`goose run --text "x"`:                                    "goose run",
-		`out=$(cursor-agent -p "plan")`:                           "cursor-agent -p",
+		`python3 -m openhands.core.main -t "solve the issue"`:      "python -m openhands.core.main",
+		`timeout 600 openhands --headless -t "$TASK"`:              "openhands --headless",
+		`uvx --from openhands-ai openhands --headless`:             "openhands --headless",
+		`goose run --text "x"`:                                     "goose run",
+		`out=$(cursor-agent -p "plan")`:                            "cursor-agent -p",
 		"echo start && \\\n  codex exec \\\n  --sandbox read-only": "codex exec",
 	}
 	for in, want := range yes {

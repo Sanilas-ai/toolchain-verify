@@ -3,7 +3,10 @@ package reposcan
 // Synthetic fixtures for agent.recursive-clone and ci.agent-publish-token.
 // Secrets are referenced by name only; nothing is executed.
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRecursiveClone(t *testing.T) {
 	root := t.TempDir()
@@ -116,5 +119,115 @@ jobs:
 `)
 	if f := find(scan(t, benign, Options{}), "ci.agent-publish-token", ""); f != nil {
 		t.Errorf("split jobs flagged: %+v", f)
+	}
+}
+
+// Severity grading of ci.agent-publish-token (who can start the agent).
+func TestAgentPublishTokenGrading(t *testing.T) {
+	commentOn := `on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened]
+`
+	cases := []struct {
+		name, wf, sev, msg string
+	}{
+		{"ungated-comment", commentOn + `jobs:
+  agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: npx -y @openai/codex exec "answer the comment"
+`, SevFail, "no author_association filter"},
+		{"author-association-gate", commentOn + `jobs:
+  agent:
+    if: contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: anthropics/claude-code-action@0123456789abcdef0123456789abcdef01234567
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+`, SevWarn, "author_association"},
+		{"builtin-check-only", commentOn + `jobs:
+  claude:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: anthropics/claude-code-action@0123456789abcdef0123456789abcdef01234567
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+`, SevWarn, "protection only inside the action"},
+		{"non-write-users-star", commentOn + `jobs:
+  claude:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: anthropics/claude-code-action@0123456789abcdef0123456789abcdef01234567
+        with:
+          allowed_non_write_users: "*"
+`, SevFail, "allowed_non_write_users"},
+		{"gate-allows-none", commentOn + `jobs:
+  agent:
+    if: contains(fromJSON('["OWNER", "NONE"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - run: claude -p "triage"
+`, SevFail, "no author_association filter"},
+		{"dispatch-oidc-only", `on: workflow_dispatch
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: openai/codex-action@0123456789abcdef0123456789abcdef01234567
+`, SevInfo, "only trusted triggers"},
+		{"schedule-contents-write", `on:
+  schedule:
+    - cron: "0 0 * * *"
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: aider --yes --message "update deps"
+`, SevWarn, "only trusted triggers"},
+		{"tag-push-publish-secret", `on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - run: codex exec "write release notes"
+`, SevWarn, "secrets.NPM_TOKEN"},
+	}
+	for _, c := range cases {
+		root := t.TempDir()
+		write(t, root, ".github/workflows/w.yml", c.wf)
+		rep := scan(t, root, Options{})
+		f := find(rep, "ci.agent-publish-token", ".github/workflows/w.yml")
+		if f == nil {
+			t.Errorf("%s: no finding%s", c.name, dump(rep))
+			continue
+		}
+		if f.Severity != c.sev || !strings.Contains(f.Message, c.msg) {
+			t.Errorf("%s: %s %q, want %s containing %q", c.name, f.Severity, f.Message, c.sev, c.msg)
+		}
 	}
 }
