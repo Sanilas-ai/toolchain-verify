@@ -252,6 +252,16 @@ func (s *scanner) checkAgentPublishJobs(rel string, doc *yaml.Node, on map[strin
 			}
 		}
 		if len(reach) == 0 && !(openToAll && len(untrusted) > 0) {
+			if len(untrusted) > 0 && !gated {
+				guard := "no author_association filter in the workflow"
+				if builtin {
+					guard = "protection only inside the action (its write-permission check), no author_association filter in the workflow"
+				}
+				s.add(Finding{Rule: "ci.agent-untrusted-trigger", Severity: SevInfo, Path: rel, Line: agentLine, Evidence: escapeEvidence(agent, 80), CWE: []string{"CWE-77"},
+					Message: "job " + name + " runs an AI coding agent (" + agent + ") on an untrusted trigger (" + strings.Join(untrusted, ", ") + ") with read-only permissions and no publish secrets; " + guard + "; a prompt injection in issue/PR/comment text can still steer the agent's output and comments and spend the API key",
+					Fix:     "gate the job with author_association (contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)) or a named-actor check; keep permissions read-only",
+					Refs:    []string{"https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions"}})
+			}
 			continue
 		}
 

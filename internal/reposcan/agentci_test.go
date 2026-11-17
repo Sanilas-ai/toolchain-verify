@@ -330,3 +330,68 @@ jobs:
 		t.Errorf("prt.yml: %+v", fs)
 	}
 }
+
+// ci.agent-untrusted-trigger: agent on an untrusted trigger with read-only
+// rights and no publish secrets is info (separate rule id, so the
+// ci.agent-publish-token silence for such jobs stays as before).
+func TestAgentUntrustedTriggerReadOnly(t *testing.T) {
+	commentOn := "on:\n  issue_comment:\n    types: [created]\n"
+	root := t.TempDir()
+	write(t, root, ".github/workflows/open.yml", commentOn+`jobs:
+  agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - run: npx -y @openai/codex exec "answer"
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+`)
+	write(t, root, ".github/workflows/builtin.yml", commentOn+`jobs:
+  claude:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: anthropics/claude-code-action@0123456789abcdef0123456789abcdef01234567
+`)
+	rep := scan(t, root, Options{})
+	f := mustFind(t, rep, "ci.agent-untrusted-trigger", ".github/workflows/open.yml", SevInfo)
+	if !strings.Contains(f.Message, "API key") || !strings.Contains(f.Fix, "author_association") {
+		t.Errorf("open.yml: %+v", f)
+	}
+	f = mustFind(t, rep, "ci.agent-untrusted-trigger", ".github/workflows/builtin.yml", SevInfo)
+	if !strings.Contains(f.Message, "protection only inside the action") {
+		t.Errorf("builtin.yml: %+v", f)
+	}
+	if f := find(rep, "ci.agent-publish-token", ""); f != nil {
+		t.Errorf("read-only job got ci.agent-publish-token: %+v", f)
+	}
+
+	quietRoot := t.TempDir()
+	// Gated by author_association: no finding.
+	write(t, quietRoot, ".github/workflows/gated.yml", commentOn+`jobs:
+  agent:
+    if: contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: claude -p "answer"
+`)
+	// Trusted trigger, read-only: no finding.
+	write(t, quietRoot, ".github/workflows/dispatch.yml", `on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - run: claude -p "summarize"
+`)
+	qrep := scan(t, quietRoot, Options{})
+	if f := find(qrep, "ci.agent-untrusted-trigger", ""); f != nil {
+		t.Errorf("gated/trusted flagged: %+v", f)
+	}
+}
