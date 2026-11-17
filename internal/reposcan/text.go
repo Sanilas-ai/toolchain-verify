@@ -27,6 +27,14 @@ func (s *scanner) scanHiddenRunes(rel string, control bool, b []byte) {
 	}
 	zw, zwMax := 0, 0
 	var zwFirst *hiddenRun
+	bidi, bidiRuns, bidiLast := 0, 0, 0 // bidiRuns counts distinct lines
+	var bidiFirst *hiddenRun
+	var bidiLines []string
+	// Docs, translations and fixture data legitimately carry RTL marks and
+	// zero-width characters (Khmer word breaks, ckb/fa RLE, WPT URL tests).
+	// Agent control files, workflows and executable code keep full
+	// severity: Trojan Source and hidden instructions live there.
+	soft := !control && softUnicodePath(rel)
 	for i := range runs {
 		r := runs[i]
 		ev := escapeEvidence(snippetAround(b, r.offset, 120), evidenceRunes)
@@ -56,14 +64,17 @@ func (s *scanner) scanHiddenRunes(rel string, control bool, b []byte) {
 			}
 			s.add(f)
 		case "bidi":
-			sev := SevWarn
-			if control {
-				sev = SevFail
+			bidi += r.count
+			if bidiFirst == nil {
+				bidiFirst = &runs[i]
 			}
-			s.add(Finding{Rule: "unicode.bidi-control", Severity: sev, Path: rel, Line: r.line, Offset: r.offset, Evidence: ev,
-				Message: fmt.Sprintf("%d bidirectional override/isolate characters: displayed text differs from logical order (Trojan Source)", r.count),
-				Fix:     "remove the bidi controls or justify them (RTL UI strings)",
-				Refs:    []string{"https://trojansource.codes/"}})
+			if r.line != bidiLast {
+				bidiLast = r.line
+				bidiRuns++
+				if len(bidiLines) < 5 {
+					bidiLines = append(bidiLines, fmt.Sprint(r.line))
+				}
+			}
 		case "variation-selector":
 			sev := SevInfo
 			switch {
@@ -84,12 +95,34 @@ func (s *scanner) scanHiddenRunes(rel string, control bool, b []byte) {
 			}
 		}
 	}
+	if bidi > 0 {
+		sev := SevWarn
+		where := ""
+		switch {
+		case control:
+			sev = SevFail
+		case soft:
+			sev, where = SevInfo, " (docs/translations/fixture data: RTL text commonly needs them)"
+		}
+		more := ""
+		if bidiRuns > len(bidiLines) {
+			more = ", …"
+		}
+		s.add(Finding{Rule: "unicode.bidi-control", Severity: sev, Path: rel, Line: bidiFirst.line, Offset: bidiFirst.offset,
+			Evidence: escapeEvidence(snippetAround(b, bidiFirst.offset, 120), evidenceRunes),
+			Message:  fmt.Sprintf("%d bidirectional override/isolate characters on %d lines (%s%s): displayed text differs from logical order (Trojan Source)%s", bidi, bidiRuns, strings.Join(bidiLines, ", "), more, where),
+			Fix:      "remove the bidi controls or justify them (RTL UI strings)",
+			Refs:     []string{"https://trojansource.codes/"}})
+	}
 	if zw > 0 {
 		sev := SevInfo
 		switch {
 		case control:
 			sev = SevWarn
-		case zw >= 8 || zwMax >= 4:
+		case zwMax >= 4:
+			// no legitimate text needs 4+ invisible characters in a row
+			sev = SevWarn
+		case zw >= 8 && !soft:
 			sev = SevWarn
 		}
 		s.add(Finding{Rule: "unicode.zero-width", Severity: sev, Path: rel, Line: zwFirst.line, Offset: zwFirst.offset,
@@ -98,6 +131,28 @@ func (s *scanner) scanHiddenRunes(rel string, control bool, b []byte) {
 			Fix:      "remove them; they split keywords past filters or encode hidden data"})
 	}
 }
+
+// softUnicodePath: documentation, translation catalogs and test fixture
+// data (not code) where bidi marks and zero-width characters are routine.
+func softUnicodePath(rel string) bool {
+	l := strings.ToLower(rel)
+	switch path.Ext(l) {
+	case ".po", ".pot", ".mo", ".xliff", ".xlf", ".md", ".mdx", ".rst", ".txt", ".adoc", ".strings", ".arb", ".ftl":
+		return true
+	}
+	for _, p := range strings.Split(path.Dir(l), "/") {
+		switch p {
+		case "locale", "locales", "i18n", "l10n", "translations", "translation", "lang", "langs", "po":
+			return true
+		}
+	}
+	return isTestishPath(rel) && !codeExt[path.Ext(l)]
+}
+
+// codeExt: source files that are compiled or interpreted.
+var codeExt = map[string]bool{".go": true, ".rs": true, ".py": true, ".js": true, ".mjs": true, ".cjs": true, ".ts": true, ".tsx": true, ".jsx": true,
+	".c": true, ".h": true, ".cc": true, ".cpp": true, ".hpp": true, ".java": true, ".kt": true, ".rb": true, ".php": true, ".cs": true, ".swift": true,
+	".sh": true, ".bash": true, ".zsh": true, ".ps1": true, ".lua": true, ".pl": true, ".scala": true, ".zig": true, ".dart": true, ".vue": true, ".svelte": true}
 
 var (
 	htmlCommentRe = regexp.MustCompile(`(?s)<!--(.*?)-->`)

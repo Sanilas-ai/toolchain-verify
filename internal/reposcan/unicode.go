@@ -44,6 +44,13 @@ func isJoiningScript(r rune) bool {
 		unicode.Kannada, unicode.Malayalam, unicode.Sinhala, unicode.Khmer, unicode.Myanmar, unicode.Mongolian)
 }
 
+// isNoSpaceScript: scripts written without spaces between words, where
+// U+200B marks word breaks.
+func isNoSpaceScript(r rune) bool {
+	return unicode.In(r, unicode.Khmer, unicode.Thai, unicode.Lao, unicode.Myanmar, unicode.Tibetan,
+		unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Javanese, unicode.Balinese)
+}
+
 // hiddenRun is one stretch of suspicious invisible characters.
 type hiddenRun struct {
 	kind    string // tags, bidi, zero-width, variation-selector
@@ -124,6 +131,9 @@ func scanRunes(b []byte) []hiddenRun {
 				break
 			}
 			add("zero-width", i, r)
+		case r == 0x200B && isNoSpaceScript(prev) && isNoSpaceScript(next):
+			// ZWSP is the word-break hint in Khmer, Thai, Lao, Myanmar,
+			// Tibetan and CJK text (translation catalogs).
 		case r == 0x200B || (r >= 0x2060 && r <= 0x2064) || r == 0x180E || r == 0x034F || r == 0x115F || r == 0x1160 || r == 0x3164 || r == 0xFFA0:
 			add("zero-width", i, r)
 		case r >= 0xE0100 && r <= 0xE01EF:
