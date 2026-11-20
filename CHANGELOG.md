@@ -37,6 +37,20 @@ this project uses [SemVer](https://semver.org/).
     `teamviewer-mcp-server`, `mcp-teamviewer` (PyPI); `mcp.blocklisted-package` matches MCP
     launch commands against the blocklist and the new `mcp_denylist`; `mcp.not-reviewed`
     enforces `mcp_reviewed` (exact reviewed specs).
+- Agent write rules (`scan`) for agents with write/mutating tools, driven by an
+  `agent-capabilities.toml`/`.json` manifest (new control-file kind, see
+  [docs/design/agent-write-rules.md](docs/design/agent-write-rules.md)):
+  - `agent.write-policy-code-derived`: the write admission policy must be derived from tool
+    schemas (`write_policy.source = "schema"`);
+  - `agent.write-plan-frozen-pre-untrusted`: the write plan is frozen before the first
+    untrusted read (`write_plan.frozen_before_untrusted_read = true`, no
+    `expand_after_untrusted`);
+  - `agent.write-args-from-user`: sensitive write arguments (`role` recipient / content /
+    amount / destination, or `sensitive = true`) need `source = "user"` or `human_confirm`.
+
+  Manifest violations fail. Matching single-file code heuristics warn; they run on
+  Python/JS/TS/Go files that call an LLM client. `agent.write-manifest` reports an
+  unparsable manifest (warn, INCOMPLETE) or one with no write tools (info).
 - Agent sandbox-isolation rules (`agent`): `agent.sandbox-approval-matrix`
   models the Codex `sandbox_mode` × `approval_policy` grid (danger-full-access
   + never = critical fail); `agent.no-isolation` flags Anthropic

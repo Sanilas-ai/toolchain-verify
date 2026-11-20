@@ -446,6 +446,11 @@ func (s *scanner) file(p, rel string) {
 		s.scanPackageHook(rel, b)
 	case KindInstructions:
 		s.scanTextControl(rel, kind, b)
+	case KindAgentCaps:
+		s.scanAgentCaps(rel, b)
+	}
+	if kind == "" && isAgentSource(rel) {
+		s.scanAgentWriteCode(rel, b)
 	}
 }
 

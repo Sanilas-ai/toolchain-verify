@@ -441,6 +441,18 @@ This finds the following:
   (Codex, Claude Code, Cursor agent, aider, OpenHands, Gemini CLI, goose, opencode) while
   publish secrets (`NPM_TOKEN`, `NODE_AUTH_TOKEN`, PyPI, cargo, …) or `id-token`/`contents`/`packages: write`
   are in reach of the same job ([Depi, Backdooring Codex](https://depi.security/blog/20261111-backdooring-codex/))
+- **Agent write rules**, for agents that call write/mutating tools (send, pay, transfer, delete,
+  publish). They are declared in an `agent-capabilities.toml`/`.json` manifest
+  ([example](examples/agent-capabilities.toml), [design](docs/design/agent-write-rules.md)).
+  A manifest violation **fails**. A best-effort code heuristic (Python/JS/TS/Go files that call
+  an LLM client) **warns**:
+  - `agent.write-policy-code-derived`: the admission policy for write tools must be built by
+    code from the tool schemas (`write_policy.source = "schema"`), never authored by a model
+    (CapLite, arXiv 2611.17115);
+  - `agent.write-plan-frozen-pre-untrusted`: the write plan is committed before the first
+    tool-output / untrusted read and never expanded (`write_plan.frozen_before_untrusted_read = true`);
+  - `agent.write-args-from-user`: recipient / content / amount / destination arguments come
+    from the user (`source = "user"`) or sit behind `human_confirm = true`.
 
 **Agent tool update cooldown** (`agent.tool-update-cooldown`, guidance): do not auto-update
 coding agents (Codex CLI, Claude Code, Cursor agent, MCP servers) the moment a release drops.
@@ -745,6 +757,17 @@ pytest/mvn/gradle — только в песочнице; git, gh и `docker ps/
   `submodule update --recursive` в инструкциях агентов, скриптах и workflow;
 - `ci.agent-publish-token` (fail): ИИ-агент запускается в том же job, где доступны секреты
   публикации или `id-token`/`contents: write`.
+- **Правила для агентов с изменяющими (write) инструментами** (отправка, оплата, перевод,
+  удаление, публикация). Они задаются манифестом `agent-capabilities.toml`/`.json`
+  ([пример](examples/agent-capabilities.toml), [дизайн](docs/design/agent-write-rules.md)).
+  Нарушение в манифесте даёт **fail**, эвристика по коду (Python/JS/TS/Go с вызовом LLM) — warn:
+  - `agent.write-policy-code-derived`: политику допуска write-действий строит код из схем
+    инструментов (`write_policy.source = "schema"`), а не модель (CapLite, arXiv 2611.17115);
+  - `agent.write-plan-frozen-pre-untrusted`: план write-действий фиксируется до первого
+    чтения tool output или недоверенного контента и потом не расширяется
+    (`write_plan.frozen_before_untrusted_read = true`);
+  - `agent.write-args-from-user`: аргументы «кому / что / сколько / куда» берутся из запроса
+    пользователя (`source = "user"`), иначе нужен `human_confirm = true`.
 
 Агентские инструменты (Codex CLI, Claude Code, Cursor agent, MCP-серверы) не стоит обновлять
 сразу после релиза: закрепите версию и переходите на новую примерно через 48 часов
