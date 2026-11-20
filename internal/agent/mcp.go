@@ -47,6 +47,9 @@ type mcpServer struct {
 	autoApprove []string
 	trust       bool
 	disabled    bool
+	// authCfg: the entry configures client auth (oauth / bearer / auth
+	// provider), so the server is not reached by name only.
+	authCfg bool
 }
 
 func checkMCP(r *resolved, c *collector, found []foundConfig) []ExecSurface {
@@ -229,6 +232,11 @@ func toServer(name string, m map[string]any) mcpServer {
 	}
 	s.trust, _ = m["trust"].(bool)
 	s.disabled, _ = m["disabled"].(bool)
+	for _, k := range []string{"oauth", "auth", "authorization", "authProviderType", "bearer_token", "bearerToken", "bearer_token_env_var", "token", "apiKey", "api_key"} {
+		if v, ok := m[k]; ok && v != nil && v != false && v != "" {
+			s.authCfg = true
+		}
+	}
 	if en, ok := m["enabled"].(bool); ok && !en {
 		s.disabled = true
 	}
@@ -317,6 +325,11 @@ func auditServer(r *resolved, c *collector, path string, s mcpServer) []ExecSurf
 			remote = true
 			c.add(Finding{Rule: "mcp.remote", Severity: SevInfo, Path: path,
 				Message: fmt.Sprintf("%s: remote MCP server %s; its tool descriptions are untrusted input (tool poisoning / rug-pull)", id, u.Host)})
+			if !s.authCfg && !hasAuthHeader(s.headers) {
+				c.add(Finding{Rule: "mcp.remote-no-auth", Severity: SevWarn, Path: path,
+					Message: fmt.Sprintf("%s: remote MCP server %s is configured without any client authentication (no Authorization/API-key header, no OAuth); agent and server identity rest on a name and a URL only (BluePhishing-style impersonation)", id, u.Host),
+					Fix:     "use an endpoint that requires OAuth 2.1 / a bearer token passed from the environment, and prefer short-lived, narrowly scoped tokens; for agent-to-agent endpoints require signed requests, not a self-declared agent name"})
+			}
 		}
 	}
 	all := s.trust
@@ -356,6 +369,17 @@ func auditServer(r *resolved, c *collector, path string, s mcpServer) []ExecSurf
 			c.add(Finding{Rule: "mcp.pipe-to-shell", Severity: SevFail, Path: path, Message: id + ": command downloads and pipes code into a shell at every start"})
 		} else if shells[cmd] && containsAny(args, "-c", "/c", "-Command", "-command") {
 			c.add(Finding{Rule: "mcp.shell", Severity: SevWarn, Path: path, Message: id + ": server is started through a shell -c string; prefer an explicit binary and args"})
+		}
+		if pkg, _ := runnerPackage(cmd, args); pkg != "" {
+			if d, ok := r.mcpDeny[mcpDenyKey(pkg)]; ok {
+				c.add(Finding{Rule: "mcp.blocklisted-package", Severity: SevFail, Path: path,
+					Message: fmt.Sprintf("%s: %s launches %q, a known fake/malicious MCP package (%s)", id, cmd, pkgName(pkg), d.reason),
+					Fix:     "remove this server, uninstall the package, rotate every credential the agent session could read", Refs: d.refs})
+			} else if r.mcpReviewed != nil && !r.mcpReviewed[strings.ToLower(pkg)] {
+				c.add(Finding{Rule: "mcp.not-reviewed", Severity: SevWarn, Path: path,
+					Message: fmt.Sprintf("%s: %s launches %q, which is not on the policy mcp_reviewed list (exact reviewed version from the first-party source)", id, cmd, pkg),
+					Fix:     "review the package source and publisher, pin the exact version and add the spec to mcp_reviewed"})
+			}
 		}
 		if pkg, pinned := runnerPackage(cmd, args); pkg != "" && !pinned {
 			c.add(Finding{Rule: "mcp.unpinned", Severity: SevWarn, Path: path,
@@ -591,4 +615,40 @@ func stripJSONC(b []byte) []byte {
 		res = append(res, ch)
 	}
 	return res
+}
+
+var authHeaderRe = regexp.MustCompile(`(?i)^(authorization|proxy-authorization|x-api-key|api-key|x-auth-token|.*token.*|.*api[-_]?key.*)$`)
+
+func hasAuthHeader(h map[string]string) bool {
+	for k, v := range h {
+		if authHeaderRe.MatchString(k) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+type mcpDenied struct {
+	reason string
+	refs   []string
+}
+
+// pkgName strips a version / extras from a runner package spec:
+// "@scope/pkg@1.2.3" -> "@scope/pkg", "pkg==1.0" -> "pkg", "pkg[cli]" -> "pkg".
+func pkgName(spec string) string {
+	s := spec
+	if i := strings.IndexAny(s, "=<>!~;["); i > 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, "@"); i > 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
+// mcpDenyKey normalises a package name for denylist lookups across npm and
+// PyPI (case-insensitive, PyPI "_" and "." equal "-").
+func mcpDenyKey(spec string) string {
+	n := strings.ToLower(pkgName(spec))
+	return strings.NewReplacer("_", "-", ".", "-").Replace(n)
 }

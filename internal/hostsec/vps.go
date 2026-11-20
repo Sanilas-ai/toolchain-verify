@@ -36,6 +36,7 @@ type VpsState struct {
 	BruteForce  []string          `json:"bruteforce_protection,omitempty"`
 	NTP         string            `json:"ntp,omitempty"`
 	Git         string            `json:"git_version,omitempty"`
+	Listeners   []string          `json:"listeners,omitempty"` // non-loopback
 }
 
 // HostKey is one /etc/ssh/ssh_host_*_key.pub.
@@ -48,7 +49,7 @@ type HostKey struct {
 
 func cwe(ids ...string) []string { return ids }
 
-func checkVps(e *env, opt Options, rep *Report, dpkg map[string]dpkgPkg, c *findings.Collector) {
+func checkVps(e *env, opt Options, pol *Policy, rep *Report, dpkg map[string]dpkgPkg, c *findings.Collector) {
 	v := &VpsState{}
 	rep.Vps = v
 	v.Hostname = hostname(e)
@@ -60,6 +61,9 @@ func checkVps(e *env, opt Options, rep *Report, dpkg map[string]dpkgPkg, c *find
 	exposed := checkSSHExposed(e, opt, v, eff, fwOK, ufw, c)
 	checkBruteForce(e, v, dpkg, exposed, ufw, eff, c)
 	checkNTP(e, opt, v, dpkg, c)
+	checkSudoers(e, c)
+	checkAuthorizedKeys(e, c)
+	checkListenersPolicy(e, opt, pol, v, c)
 	checkGitCVE(e, opt, v, dpkg, c)
 }
 
@@ -184,7 +188,7 @@ func ParseSshdT(out string) *SshdEffective {
 		if !ok {
 			continue
 		}
-		k = strings.ToLower(k)
+		k = sshdAlias(strings.ToLower(k))
 		val = strings.TrimSpace(val)
 		switch k {
 		case "port":
@@ -228,6 +232,7 @@ func parseSshdConfig(e *env, file string) *SshdEffective {
 				continue
 			}
 			at := p + ":" + strconv.Itoa(i+1)
+			k = sshdAlias(k)
 			switch k {
 			case "match":
 				match = true
@@ -265,6 +270,14 @@ func parseSshdConfig(e *env, file string) *SshdEffective {
 	return s
 }
 
+// sshdAlias maps deprecated keywords to the one sshd stores them in.
+func sshdAlias(k string) string {
+	if k == "challengeresponseauthentication" {
+		return "kbdinteractiveauthentication"
+	}
+	return k
+}
+
 func splitSshdLine(line string) (string, string) {
 	i := strings.IndexAny(line, " \t=")
 	if i < 0 {
@@ -292,7 +305,7 @@ func checkSshd(e *env, opt Options, v *VpsState, c *findings.Collector) *SshdEff
 	}
 	v.SSHPorts = s.Ports
 	v.Sshd = map[string]string{}
-	for _, k := range []string{"passwordauthentication", "permitrootlogin", "kbdinteractiveauthentication", "pubkeyauthentication", "maxauthtries"} {
+	for _, k := range []string{"passwordauthentication", "permitrootlogin", "kbdinteractiveauthentication", "usepam", "pubkeyauthentication", "maxauthtries"} {
 		if val, _ := s.get(k); val != "" {
 			v.Sshd[k] = val
 		}
@@ -326,9 +339,20 @@ func checkSshd(e *env, opt Options, v *VpsState, c *findings.Collector) *SshdEff
 			Fix:     "set `PermitRootLogin prohibit-password` (or `no` after creating a sudo user) in the first-sorting drop-in; sudo sshd -t && sudo systemctl reload ssh",
 			Refs:    []string{sshdRef}})
 	}
-	if pw != "yes" && root != "yes" {
+	// Keyboard-interactive through PAM asks for the account password, so it
+	// is password login under another name (ChallengeResponseAuthentication
+	// is its deprecated alias).
+	kbd, kbdAt := explain("kbdinteractiveauthentication", "yes")
+	pam, pamAt := explain("usepam", "no")
+	if kbd == "yes" && pam == "yes" {
+		c.Add(findings.Finding{Rule: "host.sshd-effective", Severity: findings.SevFail, Path: "sshd:kbdinteractiveauthentication", CWE: cwe("CWE-309", "CWE-307"),
+			Message: "effective KbdInteractiveAuthentication yes (" + kbdAt + ") with UsePAM yes (" + pamAt + "): PAM prompts for the password, so password guessing works even with PasswordAuthentication no",
+			Fix:     "set `KbdInteractiveAuthentication no` (and drop any `ChallengeResponseAuthentication yes`, its deprecated alias) in the first-sorting drop-in; sudo sshd -t && sudo systemctl reload ssh",
+			Refs:    []string{sshdRef}})
+	}
+	if pw != "yes" && root != "yes" && !(kbd == "yes" && pam == "yes") {
 		c.Add(findings.Finding{Rule: "host.sshd-effective", Severity: findings.SevInfo, Path: "sshd", CWE: cwe("CWE-309"),
-			Message: fmt.Sprintf("effective PasswordAuthentication %s, PermitRootLogin %s (from %s)", pw, root, v.SshdSource)})
+			Message: fmt.Sprintf("effective PasswordAuthentication %s, PermitRootLogin %s, KbdInteractiveAuthentication %s, UsePAM %s (from %s)", pw, root, kbd, pam, v.SshdSource)})
 	}
 	if !s.FromT {
 		c.Add(findings.Finding{Rule: "host.sshd-effective", Severity: findings.SevInfo, Path: "/etc/ssh/sshd_config",
@@ -490,13 +514,7 @@ func checkSSHExposed(e *env, opt Options, v *VpsState, s *SshdEffective, fwOK bo
 	if s != nil && len(s.Ports) > 0 {
 		ports = s.Ports
 	}
-	var ls []Listener
-	var err error
-	if len(opt.SS) > 0 {
-		ls, err = ParseSS(string(opt.SS))
-	} else {
-		ls, err = procListeners(e)
-	}
+	ls, err := vpsListeners(e, opt)
 	var wild []string
 	if err == nil && len(ls) > 0 {
 		for _, l := range ls {

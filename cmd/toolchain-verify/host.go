@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/Sanilas-ai/toolchain-verify/internal/hostsec"
 	"github.com/Sanilas-ai/toolchain-verify/internal/manifest"
 )
@@ -32,7 +34,9 @@ func readInput(p string, stdin io.Reader) ([]byte, error) {
 
 func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var groups []string
-	isGroup := func(a string) bool { return a == "apt" || a == "net" || a == "vps" || a == "all" }
+	isGroup := func(a string) bool {
+		return a == "apt" || a == "net" || a == "vps" || a == "apps" || a == "secrets" || a == "all"
+	}
 	for len(args) > 0 && isGroup(args[0]) {
 		groups = append(groups, args[0])
 		args = args[1:]
@@ -49,6 +53,14 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	timedatectl := fs.String("timedatectl", "", "vps: file with `timedatectl show` output (\"-\" = stdin)")
 	gitVersion := fs.String("git-version", "", "vps: file with `git --version` output (\"-\" = stdin); default: the dpkg git version")
 	nft := fs.String("nft", "", "vps: file with `sudo nft list ruleset` output (\"-\" = stdin)")
+	listenPolicy := fs.String("listen-policy", "", "vps: TOML file with `allowed = [\"22/tcp\", ...]` (or a [host.listen] section): ports that may listen outside loopback")
+	vscodeVersion := fs.String("vscode-version", "", "apps: file with `code --version` output (\"-\" = stdin); default: VS Code package.json files")
+	llamaVersion := fs.String("llama-version", "", "apps: file with `llama-server --version` output (\"-\" = stdin)")
+	chromeVersion := fs.String("chrome-version", "", "apps: file with `google-chrome --version` output (\"-\" = stdin); default: dpkg / snap Chrome and Chromium")
+	phpVersion := fs.String("php-version", "", "apps: file with `php -v` output (\"-\" = stdin); default: dpkg php packages")
+	pathEnv := fs.String("path", "", "apps: PATH value to check (default: $PATH when --root is /)")
+	sandboxHost := fs.Bool("sandbox-host", false, "secrets: this is a sandbox/swarm host; exchange and wallet keys fail (same as host.secrets.forbid_exchange_keys)")
+	keysBaseline := fs.String("authorized-keys-baseline", "", "authorized_keys-format file of the expected keys; any other authorized key fails (keys are never printed)")
 	strict := fs.Bool("strict", false, "warnings fail the run")
 	asJSON := fs.Bool("json", false, "print a JSON report")
 	verbose := fs.Bool("v", false, "verbose: also print info findings and fixes")
@@ -59,7 +71,7 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	for _, a := range fs.Args() {
 		if !isGroup(a) {
-			fmt.Fprintf(stderr, "error: unknown check group %q (want apt, net, vps or all)\n", a)
+			fmt.Fprintf(stderr, "error: unknown check group %q (want apt, net, vps, apps, secrets or all)\n", a)
 			return 2
 		}
 		groups = append(groups, a)
@@ -73,13 +85,13 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	stdinUsers := 0
-	for _, v := range []string{*ufwStatus, *ss, *sshdT, *timedatectl, *gitVersion, *nft} {
+	for _, v := range []string{*ufwStatus, *ss, *sshdT, *timedatectl, *gitVersion, *nft, *vscodeVersion, *llamaVersion, *chromeVersion, *phpVersion, *keysBaseline} {
 		if v == "-" {
 			stdinUsers++
 		}
 	}
 	if stdinUsers > 1 {
-		fmt.Fprintln(stderr, "error: only one of --ufw-status, --ss, --sshd-t, --timedatectl, --git-version and --nft can read stdin")
+		fmt.Fprintln(stderr, "error: only one of --ufw-status, --ss, --sshd-t, --timedatectl, --git-version, --nft, --vscode-version, --llama-version, --chrome-version, --php-version and --authorized-keys-baseline can read stdin")
 		return 2
 	}
 	cwd, home := cwdHome()
@@ -97,8 +109,12 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			opt.Net = true
 		case "vps":
 			opt.Vps = true
+		case "apps":
+			opt.Apps = true
+		case "secrets":
+			opt.Secrets = true
 		case "all":
-			opt.Apt, opt.Net, opt.Vps = true, true, true
+			opt.Apt, opt.Net, opt.Vps, opt.Apps = true, true, true, true
 		}
 	}
 	if opt.UfwStatus, err = readInput(*ufwStatus, stdin); err != nil {
@@ -112,7 +128,7 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	for _, in := range []struct {
 		name string
 		dst  *[]byte
-	}{{*sshdT, &opt.SshdT}, {*timedatectl, &opt.Timedatectl}, {*gitVersion, &opt.GitVersion}, {*nft, &opt.Nft}} {
+	}{{*sshdT, &opt.SshdT}, {*timedatectl, &opt.Timedatectl}, {*gitVersion, &opt.GitVersion}, {*nft, &opt.Nft}, {*vscodeVersion, &opt.VSCodeVersion}, {*llamaVersion, &opt.LlamaVersion}, {*chromeVersion, &opt.ChromeVersion}, {*phpVersion, &opt.PHPVersion}, {*keysBaseline, &opt.KeysBaseline}} {
 		if *in.dst, err = readInput(in.name, stdin); err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 2
@@ -121,6 +137,28 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var pol *hostsec.Policy
 	if m != nil {
 		pol = m.Host
+	}
+	opt.PathEnv = *pathEnv
+	if opt.PathEnv == "" && (*root == "/" || *root == "") {
+		opt.PathEnv = os.Getenv("PATH")
+	}
+	if opt.Secrets && (*root == "/" || *root == "") {
+		opt.Environ = os.Environ() // only names are ever reported
+	}
+	if *sandboxHost {
+		if pol == nil {
+			pol = &hostsec.Policy{}
+		}
+		if pol.Secrets == nil {
+			pol.Secrets = &hostsec.SecretsPolicy{}
+		}
+		pol.Secrets.ForbidExchangeKeys = true
+	}
+	if *listenPolicy != "" {
+		if opt.ListenAllowed, err = loadListenPolicy(*listenPolicy); err != nil {
+			fmt.Fprintln(stderr, "error: --listen-policy:", err)
+			return 2
+		}
 	}
 	rep, err := hostsec.Run(pol, opt)
 	if err != nil {
@@ -195,4 +233,29 @@ func dashIfEmpty(s string) string {
 		return "default"
 	}
 	return s
+}
+
+// loadListenPolicy reads `allowed = [...]` or `[host.listen] allowed = [...]`.
+func loadListenPolicy(p string) ([]string, error) {
+	var doc struct {
+		Allowed []string `toml:"allowed"`
+		Host    struct {
+			Listen struct {
+				Allowed []string `toml:"allowed"`
+			} `toml:"listen"`
+		} `toml:"host"`
+	}
+	if _, err := toml.DecodeFile(p, &doc); err != nil {
+		return nil, err
+	}
+	out := append(doc.Allowed, doc.Host.Listen.Allowed...)
+	for _, s := range out {
+		if _, err := hostsec.ParsePortSpec(s); err != nil {
+			return nil, err
+		}
+	}
+	if out == nil {
+		out = []string{} // an empty policy allows nothing
+	}
+	return out, nil
 }

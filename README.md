@@ -142,6 +142,10 @@ and Docker/Podman images and containers via `GET` requests on the local engine s
 `ALLOW_BUILTIN_DEP`) are kept from unit/container environments, so a Flowise container started
 with `ALLOW_BUILTIN_DEP=true` fails on CVE-2026-119978. `ban_unfixed = true` makes every
 advisory without a fixed release fail ("ban until fix").
+MCP launch commands (`npx`/`uvx`/`pipx run`/`uv tool run`) are matched against the blocklist
+(built-in fake MCP packages such as `karma365-mcp` and `dynamic-mcp`) plus `mcp_denylist`
+(`mcp.blocklisted-package`, fail). `mcp_reviewed = ["@scope/pkg@1.2.3", "pkg==1.2.3"]`
+reports every other launched spec (`mcp.not-reviewed`, warn).
 
 | Exit | `agent` meaning |
 |---|---|
@@ -299,16 +303,45 @@ toolchain-verify host --profile vps --json          # files only
 | Rule | CWE | Severity | Checks |
 | --- | --- | --- | --- |
 | `host.ssh-hostkeys-template` | CWE-1394, CWE-321; CWE-327 | warn (HIGH): key comment names another host (e.g. `root@fi-fi1-srv-kvm-272`), key older than the first boot (cloud-init `instance-id`, else `/var/log/installer`, else `/etc/machine-id`), no ed25519 key; **fail**: DSA key | fix: `rm /etc/ssh/ssh_host_*; ssh-keygen -A` |
-| `host.sshd-effective` | CWE-309, CWE-307; CWE-250, CWE-284 | **fail**: effective `PasswordAuthentication yes` (also the OpenSSH default when unset) or `PermitRootLogin yes` | `--sshd-t` output, else `sshd_config` with `Include` expanded in place, **first value wins**, `Match` blocks skipped; the message names the winning `file:line` and the ignored later values (e.g. `50-cloud-init.conf` beats `sshd_config`) |
+| `host.sshd-effective` | CWE-309, CWE-307; CWE-250, CWE-284 | **fail**: effective `PasswordAuthentication yes` (also the OpenSSH default when unset), `PermitRootLogin yes`, or `KbdInteractiveAuthentication yes` (alias `ChallengeResponseAuthentication`; default yes) together with `UsePAM yes`, which is password login through PAM | `--sshd-t` output, else `sshd_config` with `Include` expanded in place, **first value wins**, `Match` blocks skipped; the message names the winning `file:line` and the ignored later values (e.g. `50-cloud-init.conf` beats `sshd_config`) |
 | `host.kernel-stale` | CWE-1395 | warn | running kernel older than the newest installed `linux-image-*`, `reboot-required`, a pending linux-image security update (with the apt group) |
 | `host.no-auto-updates` | CWE-1395 | warn | `unattended-upgrades` not installed, `20auto-upgrades` missing, `Unattended-Upgrade`/`Update-Package-Lists` not `"1"` |
 | `host.firewall-off` | CWE-284, CWE-1327 | **fail** | no default-deny input policy in ufw, nftables (`--nft` or enabled `/etc/nftables.conf`) or `/etc/iptables/rules.v4` |
 | `host.ssh-exposed` | CWE-1327 | warn (info when ufw allows sshd only from specific sources) | sshd port (from the effective config) on `0.0.0.0`/`[::]` |
 | `host.no-bruteforce-protection` | CWE-307 | warn when sshd is exposed | no fail2ban, sshguard, crowdsec, or `ufw limit` on the ssh port |
+| `host.sudoers-nopasswd` | CWE-250, CWE-269 | warn: `NOPASSWD` for `ALL` (also through a `Cmnd_Alias`), e.g. cloud-init's `90-cloud-init-users`; info: `NOPASSWD` limited to a command list | `/etc/sudoers` with `@include`/`@includedir` (names with `.` or `~` skipped, as sudo does) and `/etc/sudoers.d`; unreadable files are listed as info (run as root) |
+| `host.authorized-keys-hygiene` | CWE-326, CWE-327, CWE-284, CWE-250 | warn: DSA key, RSA key < 2048 bits, the same key twice or in two accounts, root key without `from=`/`command=`; info: per-file count of user keys without `from=`/`command=` | root and accounts with uid ≥ 1000 and a login shell; `authorized_keys` and `authorized_keys2`. No key material or fingerprint is printed |
+| `host.listeners-policy` | CWE-1327, CWE-284 | warn: a non-loopback listener not in the allowlist; info: inventory when no policy is set | allowlist from `--listen-policy FILE` or `[host.listen] allowed = ["22/tcp", "443/udp"]`; sockets from `/proc/net/{tcp,tcp6,udp,udp6}` or `--ss` (`ss -tlnp` output); ephemeral-range UDP skipped |
 | `host.ntp-unsynced` | CWE-778 | warn | `timedatectl show` `NTPSynchronized=no`/`NTP=no`, or timesyncd without `/run/systemd/timesync/synchronized`, or no NTP client |
 | `host.git-cve-2026-111760` | CWE-197, CWE-59 | warn (HIGH; info when `changelog.Debian.gz` lists the CVE) | git below 2.56.1 / 2.55.1 / 2.54.1 / 2.53.1 / 2.52.1 / 2.51.3 / 2.50.2 ([GHSA-vp2w-7xxj-jvxr](https://github.com/git/git/security/advisories/GHSA-vp2w-7xxj-jvxr): code execution on `clone --recurse-submodules`) |
 
-Findings now carry a `cwe` list in JSON (printed with `-v`).
+Findings now carry a `cwe` list in JSON (printed with `-v`). Step-by-step checklist for a
+fresh VPS, including a note on vanilla WireGuard behind DPI:
+[docs/vps-fresh-image-checklist.md](docs/vps-fresh-image-checklist.md).
+
+**Workstation AI/IDE apps (`host apps`).** VS Code < 1.145.3 (CVE-2026-120779), llama.cpp
+`llama-server` < b12340 (`--llama-version`), denylisted IDE extensions (trojanized
+`anthropic.claude-code` 2.1.312/2.1.313 and `[host.apps] extension_denylist`), the
+`svc-telemetry` IoC key, and with `--authorized-keys-baseline FILE` any authorized key that
+is not in the baseline. Also in `host apps`: Chrome/Chromium < 157.0.8103.50
+(`host.chrome-cve-2026-125350`, KEV; dpkg/snap or `--chrome-version`), PHP below
+8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 or EOL (`host.php-cve-2026-109618`; distro backports
+listed in `changelog.Debian.gz` are info), a user-writable `$PATH` entry ahead of the system
+directories (`host.path-user-writable`, `host.path-shadow`; fail when it shadows `sudo`,
+`su`, `ssh` and similar), a tampered pyenv/rbenv/nodenv dispatcher or shim or a re-pointed
+Homebrew link (`host.version-manager-tamper`), and IDE extension auto-update left on
+(`host.ide-extension-autoupdate`). Details and the wfx-loot runbook:
+[docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md).
+
+**Secrets finder (`host secrets`, on demand, never part of `host all`).** It reads well-known
+token locations (`~/.cache/huggingface/token`, `~/.git-credentials`, `.env*` up to two levels
+below each home, `~/.config/**` without browser profiles and caches, `[host.secrets]
+extra_paths`) and the environment's variable names. It reports `file:line`, the credential
+kind (Hugging Face, GitHub, OpenAI, Anthropic, Google AI, xAI, Groq, npm, PyPI, exchange API
+key, wallet seed/key, git credential) and a redacted form that keeps only the public prefix
+(`hf_…[37 chars]`). Values are never printed. `host.secret-file` warns. On a host marked
+sandbox/swarm (`[host.secrets] forbid_exchange_keys = true` or `--sandbox-host`), an exchange
+or wallet key fails as `host.exchange-key-forbidden`.
 
 Configure with `[host]`, `[host.apt]`, `[host.net]` and `[[host.kernel_floor]]` (see
 [examples/host-hp.toml](examples/host-hp.toml)). Build the binary in the sandbox and run
@@ -592,6 +625,10 @@ toolchain-verify agent --quarantine                # убрать подброш
   `npm -g`, snap, юниты systemd (`stack.service`), образы и контейнеры Docker/Podman через
   `GET`-запросы к локальному сокету. Из окружения берутся только имена переменных вроде
   `ALLOW_BUILTIN_DEP`. `ban_unfixed = true` — запрет уязвимых версий без исправления.
+- Команды запуска MCP (`npx`/`uvx`/`pipx run`/`uv tool run`) сверяются с блоклистом
+  (встроенные фейковые MCP-пакеты `karma365-mcp`, `dynamic-mcp` и др.) и `mcp_denylist`
+  (`mcp.blocklisted-package`, fail); `mcp_reviewed` — список проверенных точных версий,
+  всё остальное — `mcp.not-reviewed` (warn).
 - Коды выхода: `0` — норма, `1` — есть ошибки, `2` — ошибка использования/политики или
   запрещённая цель, `3` — `--pre-session`: недоверенный каталог. `-q` — без вывода при успехе (для cron).
 
@@ -644,13 +681,44 @@ toolchain-verify host net -m examples/host-hp.toml --ufw-status /tmp/ufw.txt
 cloud-init), без firewall и без защиты от перебора. Проверки: `host.ssh-hostkeys-template`
 (комментарий ключа с чужим hostname, ключ старше первой загрузки, нет ed25519 — warn; DSA —
 fail; исправление: `rm /etc/ssh/ssh_host_*; ssh-keygen -A`), `host.sshd-effective`
-(эффективные `PasswordAuthentication yes` / `PermitRootLogin yes` — fail; по выводу
+(эффективные `PasswordAuthentication yes` / `PermitRootLogin yes`, а также
+`KbdInteractiveAuthentication yes` (или старое `ChallengeResponseAuthentication`) при
+`UsePAM yes`, ведь это тот же вход по паролю через PAM — fail; по выводу
 `sudo sshd -T` через `--sshd-t` или по `sshd_config` с `Include` и правилом «первое значение
 выигрывает», поэтому `50-cloud-init.conf` перекрывает строку в `sshd_config`),
 `host.kernel-stale`, `host.no-auto-updates`, `host.firewall-off` (fail), `host.ssh-exposed`,
 `host.no-bruteforce-protection`, `host.ntp-unsynced` (`--timedatectl`),
-`host.git-cve-2026-111760` (git < 2.56.1 и других исправленных веток; `--git-version`).
-У каждой находки в JSON есть список `cwe`.
+`host.git-cve-2026-111760` (git < 2.56.1 и других исправленных веток; `--git-version`),
+`host.sudoers-nopasswd` (`NOPASSWD: ALL`, например `90-cloud-init-users` — warn; список
+команд — info), `host.authorized-keys-hygiene` (DSA, RSA < 2048, дубликаты, ключ root без
+`from=`/`command=` — warn), `host.listeners-policy` (слушатели вне loopback, которых нет в
+`--listen-policy` / `[host.listen]` — warn; без политики — info-инвентарь).
+У каждой находки в JSON есть список `cwe`. Пошаговый чеклист для свежего VPS и рекомендация
+не полагаться на ванильный WireGuard на пути с DPI:
+[docs/vps-fresh-image-checklist.md](docs/vps-fresh-image-checklist.md).
+
+**ИИ- и IDE-софт рабочей станции (`host apps`).** VS Code < 1.145.3 (CVE-2026-120779),
+`llama-server` < b12340 (`--llama-version`), расширения из денайлиста (троянские
+`anthropic.claude-code` 2.1.312/2.1.313 и `[host.apps] extension_denylist`), IoC-ключ
+`svc-telemetry`, а с `--authorized-keys-baseline FILE` любой ключ вне эталона (ключи и
+отпечатки не печатаются). Также в `host apps`: Chrome/Chromium < 157.0.8103.50
+(`host.chrome-cve-2026-125350`, KEV), PHP ниже 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 или EOL
+(`host.php-cve-2026-109618`; бэкпорт из `changelog.Debian.gz` — info), записываемый
+пользователем каталог в `$PATH` раньше системных (`host.path-user-writable`,
+`host.path-shadow`; fail, если он подменяет `sudo`, `su`, `ssh` и т.п.), подменённый
+диспетчер или шим pyenv/rbenv/nodenv или перенаправленная ссылка Homebrew
+(`host.version-manager-tamper`), включённое автообновление расширений IDE
+(`host.ide-extension-autoupdate`). Подробности и чеклист по wfx-loot:
+[docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md).
+
+**Поиск секретов (`host secrets`, только по запросу, в `host all` не входит).** Читает
+типовые места токенов (`~/.cache/huggingface/token`, `~/.git-credentials`, `.env*` до двух
+уровней вглубь домашнего каталога, `~/.config/**` без профилей браузеров и кешей,
+`[host.secrets] extra_paths`) и имена переменных окружения. Сообщает `файл:строка`, вид
+ключа и замаскированную форму с одним публичным префиксом (`hf_…[37 chars]`); значения не
+печатаются никогда. `host.secret-file` — warn. На хосте-песочнице или рое
+(`[host.secrets] forbid_exchange_keys = true` или `--sandbox-host`) ключ биржи или кошелька —
+fail `host.exchange-key-forbidden`.
 
 Бинарник собирается в песочнице, а запускается на хосте: из песочницы не видно пакеты,
 сокеты и firewall хоста.
