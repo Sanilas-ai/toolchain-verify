@@ -4,24 +4,20 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/Sanilas-ai/toolchain-verify/internal/findings"
 )
 
-// Severities.
+// Severities. Aliases of the shared findings constants.
 const (
-	SevFail = "fail"
-	SevWarn = "warn"
-	SevInfo = "info"
+	SevFail = findings.SevFail
+	SevWarn = findings.SevWarn
+	SevInfo = findings.SevInfo
 )
 
-// Finding is one observation.
-type Finding struct {
-	Rule     string   `json:"rule"`
-	Severity string   `json:"severity"`
-	Path     string   `json:"path,omitempty"`
-	Message  string   `json:"message"`
-	Fix      string   `json:"fix,omitempty"`
-	Refs     []string `json:"refs,omitempty"`
-}
+// Finding is the shared observation. Agent reports use the same JSON
+// object as scan, exec-lint, host and models.
+type Finding = findings.Finding
 
 // Install is an agent stack (or blocklisted package) found on disk.
 type Install struct {
@@ -47,15 +43,16 @@ type ExecSurface struct {
 
 // Report is the result of an agent run.
 type Report struct {
-	InContainer  bool      `json:"in_container"`
-	Home         string    `json:"home"`
-	Cwd          string    `json:"cwd"`
-	OK           bool      `json:"ok"`
-	Strict       bool      `json:"strict"`
-	AdvisoryDB   string    `json:"advisory_db_updated"`
-	TrustedRoots []string  `json:"trusted_roots"`
-	Scanned      []string  `json:"scanned"`
-	Installs     []Install `json:"installs,omitempty"`
+	SchemaVersion int       `json:"schema_version"`
+	InContainer   bool      `json:"in_container"`
+	Home          string    `json:"home"`
+	Cwd           string    `json:"cwd"`
+	OK            bool      `json:"ok"`
+	Strict        bool      `json:"strict"`
+	AdvisoryDB    string    `json:"advisory_db_updated"`
+	TrustedRoots  []string  `json:"trusted_roots"`
+	Scanned       []string  `json:"scanned"`
+	Installs      []Install `json:"installs,omitempty"`
 	// ExecSurfaces lists every exec-capable surface (also mirrored as
 	// policy.exec-surface findings for text/JSON/SARIF consumers).
 	ExecSurfaces []ExecSurface `json:"exec_surfaces,omitempty"`

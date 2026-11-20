@@ -1,6 +1,8 @@
 package execpolicy
 
 import (
+	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,8 +18,15 @@ type Input struct {
 	Home string
 	// InSandbox forces the in-sandbox mode (nil: detect via markers).
 	InSandbox *bool
+	// FollowScript reads one script file named by bash/sh/python/node
+	// when that file is inside Cwd, and judges its text with SplitShell.
+	// One file deep. Unreadable means deny.
+	FollowScript bool
+	// FollowLimit caps bytes read from that file (default 1 MiB).
+	FollowLimit int64
 
 	inSandbox bool
+	followed  bool
 }
 
 // Decision is the policy verdict for an Input.
@@ -182,6 +191,16 @@ func (q *Policy) evalCommand(sc SimpleCommand, in Input, depth int) []Segment {
 	seg.Program = base(argv[0])
 	seg.Wrapped = wrapped
 
+	if argv0Unexpanded(argv[0]) {
+		return []Segment{{Argv: sc.Argv, Program: seg.Program, Verdict: q.Unparsable,
+			Reason: "argv[0] is an unexpanded variable (" + argv[0] + "); refusing rather than applying the default"}}
+	}
+	if in.FollowScript && !in.followed && !wrapped {
+		if segs, ok := q.followScript(argv, sc, in, depth); ok {
+			return segs
+		}
+	}
+
 	// Pipe to shell: curl ... | sh, or sh <(curl ...).
 	if !wrapped && isShellName(argv[0]) && !hasFlagC(argv) {
 		feedsFromFetch := sc.Piped && len(sc.PipedFrom) > 0 && fetchRe.MatchString(strings.Join(sc.PipedFrom, " "))
@@ -246,6 +265,120 @@ func (q *Policy) evalCommand(sc SimpleCommand, in Input, depth int) []Segment {
 	seg.Verdict = q.Default
 	seg.Reason = "no rule matches; default is " + q.Default
 	return []Segment{seg}
+}
+
+func argv0Unexpanded(s string) bool {
+	return strings.Contains(s, "$")
+}
+
+func isInterpreter(name string) bool {
+	b := base(name)
+	switch b {
+	case "bash", "sh", "dash", "zsh", "ksh", "python", "python3", "node", "nodejs":
+		return true
+	}
+	return strings.HasPrefix(b, "python3.") || strings.HasPrefix(b, "python2.")
+}
+
+// scriptFileArg returns the first non-flag argument of an interpreter,
+// skipping the value of -c/-e/-m.
+func scriptFileArg(argv []string) (string, bool) {
+	if len(argv) == 0 || !isInterpreter(argv[0]) {
+		return "", false
+	}
+	skip := false
+	for _, a := range argv[1:] {
+		if skip {
+			skip = false
+			continue
+		}
+		switch a {
+		case "-c", "--command", "-e", "--eval", "-m", "--module":
+			skip = true
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		return a, true
+	}
+	return "", false
+}
+
+// followScript judges the text of one script file inside the working
+// directory. ok is false when there is nothing to follow.
+func (q *Policy) followScript(argv []string, sc SimpleCommand, in Input, depth int) ([]Segment, bool) {
+	arg, ok := scriptFileArg(argv)
+	if !ok {
+		return nil, false
+	}
+	path, unreadable := scriptInside(in.Cwd, arg)
+	deny := func(reason string) ([]Segment, bool) {
+		return []Segment{{Argv: sc.Argv, Program: base(argv[0]), Verdict: q.Unparsable, Reason: reason}}, true
+	}
+	if unreadable {
+		return deny("script " + arg + " inside the working directory could not be read")
+	}
+	if path == "" {
+		return nil, false
+	}
+	limit := in.FollowLimit
+	if limit <= 0 {
+		limit = 1 << 20
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return deny("script " + arg + " inside the working directory could not be read")
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, limit))
+	if err != nil {
+		return deny("script " + arg + " inside the working directory could not be read")
+	}
+	subs, err := SplitShell(string(b))
+	if err != nil {
+		return deny("cannot parse script " + filepath.Base(path) + ": " + err.Error())
+	}
+	in2 := in
+	in2.followed = true
+	var out []Segment
+	for _, sub := range subs {
+		for _, s := range q.evalCommand(sub, in2, depth+1) {
+			s.Argv = sc.Argv
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, Segment{Argv: sc.Argv, Program: base(argv[0]), Verdict: q.Default,
+			Reason: "script " + filepath.Base(path) + " contained no commands; default is " + q.Default})
+	}
+	return out, true
+}
+
+func scriptInside(cwd, arg string) (path string, unreadable bool) {
+	if cwd == "" || arg == "" {
+		return "", false
+	}
+	p := arg
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
+	}
+	p = filepath.Clean(p)
+	rel, err := filepath.Rel(filepath.Clean(cwd), p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		if os.IsPermission(err) {
+			return "", true
+		}
+		return "", false
+	}
+	if !st.Mode().IsRegular() {
+		return "", false
+	}
+	return p, false
 }
 
 // matchLayers returns the most restrictive explicit rule match over the

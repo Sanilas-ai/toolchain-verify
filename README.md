@@ -128,7 +128,7 @@ are configured, warn otherwise).
 `--quarantine` (off by default; `[agent] quarantine_dir`, `--quarantine-dir`, default
 `~/.local/state/toolchain-verify/quarantine`) moves files flagged by `instr.untrusted` and
 `mcp.untrusted-location` to `<dir>/<UTC timestamp>/<original path>.quarantined` (mode 0600,
-with `MANIFEST.tsv` holding source path and SHA-256). It is the only write the tool ever makes;
+with `MANIFEST.tsv` holding source path and SHA-256). It is the only write `agent` makes;
 the quarantine dir must not be `/`, `~`, a credential store, a trusted root or an untrusted dir.
 Moved findings become warnings.
 
@@ -383,6 +383,48 @@ Agent hooks (the command arrives as JSON on stdin):
 A missing policy or a malformed payload blocks. The policy is a guard rail against
 mistakes and prompt injection, not a sandbox: see [DESIGN.md](DESIGN.md#exec-policy-toolchain-verify-policy).
 
+The hook is the action pipeline. It runs when the client calls it. `trace` is the
+client's journal and stays a journal.
+
+```bash
+toolchain-verify posture --agent-netns none --agent-env /run/agent.env --trusted /work/repo
+toolchain-verify policy check -m policy.toml --hook claude --on-host \
+  --mediate-log /var/log/tv/mediate.jsonl --repo /work/repo --session s1 \
+  --trusted /work/repo --allow-subject 'uid=1000,container=true,repo=/work/repo'
+toolchain-verify policy check --hook claude-post \
+  --mediate-log /var/log/tv/mediate.jsonl --repo /work/repo
+```
+
+`--mediate-log` must sit outside `--repo`. Each line is the rule, the verdict, the tool
+name, and the subject (uid, container, repo, session). Argument text is not copied.
+A shell allow needs `--approve` or `yes` on `/dev/tty` (`--tty-file` in tests). `no`
+or silence is `pipeline.tty`. A credential path in the arguments is `pipeline.path`.
+An unknown tool class is `pipeline.class`. `Read` of `/etc/passwd` with no `--trusted`
+stays allow. A non-empty `--allow-subject` allows only a matching uid, container flag,
+and repo. The session is recorded and is not part of the match.
+
+`claude-post` and `cursor-post` scrub the tool result before it re-enters the context.
+An untrusted result is stored as hashes under its `tool_use_id` when `--mediate-log`
+is set. Without that log the post hook denies it. A later call that repeats a
+remembered phrase is `pipeline.flow`.
+
+`posture` runs admission first, then pre-session, policy validate, mcp-lock, and the
+advisory-database age check. The exit status is the worst of the five. Admission fails
+when `--agent-netns` is not `none`, when `require_container` is set and this process
+is not in a container, when this uid can open a credential file or append a hook or
+the exec policy, or when `--agent-env` names a secret. Values from that file are not
+printed. `/proc/*/environ` is not read.
+
+`policy check -c` without `--hook` is the shell decision only: no terminal question
+and no mediator log. Editor writes, `git push`, the clipboard, the browser, and the
+request to the model provider are not on this hook. `posture` is what reports that
+the process can already open a secret or the network before any call.
+
+```bash
+toolchain-verify trace session.jsonl       # finished journal, exit 1 on the first finding
+toolchain-verify trace watch session.jsonl # follow the live file; the tool has usually already run
+```
+
 ### Model artifacts
 
 `toolchain-verify models` is a read-only scan of local model files and the Ollama store. It
@@ -434,13 +476,20 @@ This finds the following:
 - risky MCP and agent configs, editor auto-run tasks and unsafe GitHub workflows
 - package install hooks
 - known IOCs, such as the strutil-core / pystr-codec campaign
-- `agent.recursive-clone` (warn, CWE-829/CWE-59): `git clone --recurse-submodules` / `--recursive`,
+- `agent.recursive-clone` (warn, CWE-829/CWE-59, one finding per file): `git clone --recurse-submodules` / `--recursive`,
   `git submodule update --recursive` or `actions/checkout` `submodules: recursive` in agent
-  instructions, rules, scripts, Makefiles and workflows (git CVE-2026-111760)
-- `ci.agent-publish-token` (fail, CWE-269/CWE-522): a workflow job runs an AI coding agent
-  (Codex, Claude Code, Cursor agent, aider, OpenHands, Gemini CLI, goose, opencode) while
+  instructions, rules, scripts, Makefiles and workflows (git CVE-2026-111760; real risk only where git < 2.56.1)
+- `ci.agent-publish-token` (fail/warn/info, CWE-269/CWE-522): a workflow job runs an AI coding agent
+  (Codex, Claude Code, Cursor agent, aider, OpenHands, Gemini CLI, goose, opencode; an actual
+  `uses:`/command invocation, not a name in an image or package) while
   publish secrets (`NPM_TOKEN`, `NODE_AUTH_TOKEN`, PyPI, cargo, …) or `id-token`/`contents`/`packages: write`
-  are in reach of the same job ([Depi, Backdooring Codex](https://depi.security/blog/20261111-backdooring-codex/))
+  are in reach of the same job ([Depi, Backdooring Codex](https://depi.security/blog/20261111-backdooring-codex/)).
+  fail: untrusted trigger (issue_comment, issues, pull_request_target, …) with no author_association
+  filter and no built-in write check; warn: gated, or protected only inside the action; info: trusted
+  triggers only with just `id-token: write`
+- `ci.agent-untrusted-trigger` (info): the agent runs on an untrusted trigger (issue_comment, issues,
+  pull_request_target, …) with read-only rights and no publish secrets but without an author_association
+  filter; prompt injection can still steer its output/comments and spend the API key
 - **Agent write rules**, for agents that call write/mutating tools (send, pay, transfer, delete,
   publish). They are declared in an `agent-capabilities.toml`/`.json` manifest
   ([example](examples/agent-capabilities.toml), [design](docs/design/agent-write-rules.md)).
@@ -620,7 +669,7 @@ toolchain-verify agent --quarantine                # убрать подброш
   `cwd.untrusted`, подброшенные файлы инструкций всё равно дают ошибку.
 - `--quarantine` (по умолчанию выключен) переносит файлы `instr.untrusted` и
   `mcp.untrusted-location` в `~/.local/state/toolchain-verify/quarantine/<время UTC>/...quarantined`
-  (права 0600, `MANIFEST.tsv` с SHA-256). Это единственная запись, которую делает утилита.
+  (права 0600, `MANIFEST.tsv` с SHA-256). Это единственная запись, которую делает `agent`.
 - Инвентаризация хоста (отключается `--no-host-inventory`): pip user site, pipx, conda,
   `npm -g`, snap, юниты systemd (`stack.service`), образы и контейнеры Docker/Podman через
   `GET`-запросы к локальному сокету. Из окружения берутся только имена переменных вроде
@@ -744,6 +793,41 @@ pytest/mvn/gradle — только в песочнице; git, gh и `docker ps/
 --privileged` и монтирование `docker.sock`, `curl | sh` — запрещены. Это ограждение от
 ошибок и prompt injection, а не песочница.
 
+Хук — пайплайн действия. Он работает, когда клиент его вызывает. `trace` остаётся
+журналом клиента.
+
+```bash
+toolchain-verify posture --agent-netns none --agent-env /run/agent.env --trusted /work/repo
+toolchain-verify policy check -m policy.toml --hook claude --on-host \
+  --mediate-log /var/log/tv/mediate.jsonl --repo /work/repo --session s1 \
+  --trusted /work/repo --allow-subject 'uid=1000,container=true,repo=/work/repo'
+toolchain-verify policy check --hook claude-post \
+  --mediate-log /var/log/tv/mediate.jsonl --repo /work/repo
+toolchain-verify trace watch session.jsonl
+```
+
+`--mediate-log` лежит вне `--repo`. В строке правило, вердикт, имя инструмента и
+субъект (uid, контейнер, репозиторий, сессия). Текст аргумента туда не пишется.
+Разрешение shell требует `--approve` или `yes` на `/dev/tty`. Молчание и `no` —
+`pipeline.tty`. Путь к секрету в аргументах — `pipeline.path`. Неизвестный класс
+инструмента — `pipeline.class`. Непустой `--allow-subject` пропускает только
+совпадение uid, контейнера и корня. Сессия записывается и в сравнение не входит.
+
+`claude-post` и `cursor-post` чистят ответ до возврата в контекст. Недоверенный
+результат запоминается хешами по `tool_use_id`, если задан `--mediate-log`. Без
+журнала такой ответ запрещён. Повтор фразы в следующем вызове — `pipeline.flow`.
+
+`posture` сначала делает допуск, затем pre-session, проверку политики, mcp-lock и
+возраст базы. Код выхода — худший из пяти. Допуск не проходит, если сеть не `none`,
+если манифест требует контейнер, а процесс вне его, если uid открывает файл секрета
+или дописывает хук либо политику, или если в `--agent-env` есть секрет. Значения из
+файла не печатаются. `/proc/*/environ` не читается.
+
+`policy check -c` без `--hook` — только решение по shell: без вопроса на терминале
+и без журнала посредника. Запись редактора, `git push`, буфер, браузер и запрос к
+провайдеру модели этот хук не проводит. `posture` сообщает, что процесс уже может
+открыть секрет или сеть до любого вызова.
+
 ### Сканирование репозитория (`scan`)
 
 `toolchain-verify scan ПУТЬ` проверяет репозиторий только на чтение и ничего из него не запускает. Он ищет:
@@ -753,10 +837,16 @@ pytest/mvn/gradle — только в песочнице; git, gh и `docker ps/
 - небезопасные GitHub workflows;
 - хуки установки пакетов;
 - известные IOC;
-- `agent.recursive-clone` (warn): `git clone --recurse-submodules`/`--recursive` и
-  `submodule update --recursive` в инструкциях агентов, скриптах и workflow;
-- `ci.agent-publish-token` (fail): ИИ-агент запускается в том же job, где доступны секреты
-  публикации или `id-token`/`contents: write`.
+- `agent.recursive-clone` (warn, одна находка на файл): `git clone --recurse-submodules`/`--recursive` и
+  `submodule update --recursive` в инструкциях агентов, скриптах и workflow (реальный риск при git < 2.56.1);
+- `ci.agent-publish-token` (fail/warn/info): ИИ-агент действительно запускается (`uses:` или команда,
+  а не имя в образе или пакете) в том же job, где доступны секреты публикации или
+  `id-token`/`contents: write`. fail — недоверенный триггер без фильтра author_association и без
+  встроенной проверки прав; warn — есть фильтр или защита только внутри action; info — только
+  доверенные триггеры и лишь `id-token: write`;
+- `ci.agent-untrusted-trigger` (info): агент запускается на недоверенном триггере только с правами
+  на чтение и без секретов публикации, но без фильтра author_association; промпт-инъекция всё ещё
+  влияет на его ответы/комментарии и расход API-ключа.
 - **Правила для агентов с изменяющими (write) инструментами** (отправка, оплата, перевод,
   удаление, публикация). Они задаются манифестом `agent-capabilities.toml`/`.json`
   ([пример](examples/agent-capabilities.toml), [дизайн](docs/design/agent-write-rules.md)).

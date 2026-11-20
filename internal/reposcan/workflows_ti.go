@@ -26,9 +26,9 @@ var (
 	// deleting workflow runs or their logs from inside a workflow.
 	logTamperRe = regexp.MustCompile(`(?i)\bgh\s+run\s+delete\b|actions/runs/[^\s"']*(/logs)?[^\n]*(-X\s*DELETE|--method\s+DELETE)|(-X\s*DELETE|--method\s+DELETE)[^\n]*actions/runs/`)
 	// npx / npm -g of a package with no version.
-	npxRe       = regexp.MustCompile(`(?m)(?:^|[\s;&|(])npx[ \t]+((?:-[^\s]+[ \t]+)*)(@?[A-Za-z0-9._/-]+(?:@[^\s]+)?)`)
-	npmGlobalRe = regexp.MustCompile(`(?m)(?:^|[\s;&|(])npm[ \t]+(?:i|install|add)[ \t]+(?:-g|--global)[ \t]+((?:[@A-Za-z0-9._/-]+(?:@[^\s]+)?[ \t]*)+)`)
-	actorGateRe = regexp.MustCompile(`author_association|github\.actor\b|github\.triggering_actor|sender\.login|contains\(\s*fromJSON|github\.event\.comment\.user\.login|github\.event\.issue\.user\.login`)
+	npxRe         = regexp.MustCompile(`(?m)(?:^|[\s;&|(])npx[ \t]+((?:-[^\s]+[ \t]+)*)(@?[A-Za-z0-9._/-]+(?:@[^\s]+)?)`)
+	npmGlobalRe   = regexp.MustCompile(`(?m)(?:^|[\s;&|(])npm[ \t]+(?:i|install|add)[ \t]+(?:-g|--global)[ \t]+((?:[@A-Za-z0-9._/-]+(?:@[^\s]+)?[ \t]*)+)`)
+	tiActorGateRe = regexp.MustCompile(`author_association|github\.actor\b|github\.triggering_actor|sender\.login|contains\(\s*fromJSON|github\.event\.comment\.user\.login|github\.event\.issue\.user\.login`)
 )
 
 // untrustedTriggers carry text written by anyone who can open an issue,
@@ -138,7 +138,7 @@ func (s *scanner) checkAgentUntrustedTrigger(rel string, doc *yaml.Node, on map[
 	for i := 0; i+1 < len(jobs.Content); i += 2 {
 		name, job := jobs.Content[i].Value, jobs.Content[i+1]
 		gated := false
-		if c := ymap(job, "if"); c != nil && actorGateRe.MatchString(c.Value) {
+		if c := ymap(job, "if"); c != nil && tiActorGateRe.MatchString(c.Value) {
 			gated = true
 		}
 		st := ymap(job, "steps")
@@ -150,15 +150,15 @@ func (s *scanner) checkAgentUntrustedTrigger(rel string, doc *yaml.Node, on map[
 			if u := ymap(step, "uses"); u != nil && agentUsesRe.MatchString(u.Value) {
 				agent, line = u.Value, u.Line
 			} else if r := ymap(step, "run"); r != nil {
-				if m := agentRunRe.FindString(r.Value); m != "" {
-					agent, line = strings.TrimSpace(strings.TrimLeft(m, " ;&|(/")), r.Line
+				if m := agentInvocation(r.Value); m != "" {
+					agent, line = m, r.Line
 				}
 			}
 			if agent == "" {
 				continue
 			}
 			stepGated := gated
-			if c := ymap(step, "if"); c != nil && actorGateRe.MatchString(c.Value) {
+			if c := ymap(step, "if"); c != nil && tiActorGateRe.MatchString(c.Value) {
 				stepGated = true
 			}
 			var vals []*yaml.Node

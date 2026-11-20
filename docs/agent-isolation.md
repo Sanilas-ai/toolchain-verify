@@ -1,14 +1,16 @@
 # Agent isolation & MCP supply-chain rules
 
-Deterministic, read-only checks that an AI coding agent runs with real
-isolation and that its MCP servers cannot be swapped out from under it. They
+Deterministic checks that an AI coding agent runs with real isolation and
+that its MCP servers cannot be swapped out from under it. The rules below
 read already-parsed config files; nothing is executed and no credential file
 is opened. Inspired by Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime)
 (dual filesystem+network isolation), the OpenAI [Codex](https://github.com/openai/codex)
 sandbox×approval model, [docker/mcp-gateway](https://github.com/docker/mcp-gateway)
 (per-server containers), [mozilla-ai/mcpd](https://github.com/mozilla-ai/mcpd)
 (a lock file for MCP) and [snyk/agent-scan](https://github.com/snyk/agent-scan)
-(tool-poisoning / rug-pull).
+(tool-poisoning / rug-pull). The action pipeline at the end of this page
+is the path a client invokes per call. It appends a mediator log and does
+not print argument text or secret values.
 
 ## Rules
 
@@ -66,3 +68,65 @@ integrity hash of the whole launch spec (command + args + url). A later
 verify fails on drift or package substitution and warns on an unpinned
 `pkg@latest`. With `--tools` the lock also carries tool-definition hashes so
 a changed description (rug pull) fails the verify.
+
+## Action pipeline
+
+Three roles. The static rules on this page answer what the files allow
+before a session. `trace` answers what the client wrote in its journal,
+usually after the tool has returned. `policy check --hook` answers whether
+this call may proceed, and what came back. The hook runs when the client
+calls it. It is not a process the call is forced through. No second model
+sits on the verdict.
+
+```text
+posture admission
+  → policy --hook (mediator, subject, exec policy, arguments, tty)
+  → tool
+  → claude-post / cursor-post (scrub, remember hashes)
+  → mediator line
+```
+
+`trace` stays beside that pipe.
+
+| Rule | When it fires |
+|------|----------------|
+| `admit.container` | `require_container` is set and this process is not in a container |
+| `admit.credential` | this uid can open `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.claude/.credentials.json`, or `~/.codex/auth.json` |
+| `admit.guard` | this uid can append `~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.config/toolchain-verify/exec-policy.toml`, or `--policy` |
+| `admit.env` | `--agent-env` has a secret-like name or value; the finding keeps the name |
+| `admit.network` | `--agent-netns` is missing or is not `none` |
+| `pipeline.path` | an argument names a credential path, or an absolute path outside `--trusted` |
+| `pipeline.class` | the tool class is `other` |
+| `pipeline.subject` | `--allow-subject` is set and uid, container, and repo do not match |
+| `pipeline.tty` | a shell allow has no `--approve` and no `yes` on `/dev/tty` |
+| `pipeline.flow` | a later call repeats a phrase from an untrusted result, or the post hook has no mediator log for that result |
+| `pipeline.scrub` / `injection.*` | the tool result fails the scrub |
+
+`posture` runs admission and then pre-session, exec-policy validate,
+mcp-lock, and the advisory-database age. The exit status is the worst of
+the five. `/proc/*/environ` is not read. The operator passes `--agent-env`.
+
+The mediator line is JSON: `rule`, `verdict`, `tool`, `subject`
+(`uid`, `container`, `repo`, `session`). On the return path `source` is
+the `tool_use_id`. The file is `--mediate-log`, outside `--repo`,
+append-only, mode `0600`, `O_NOFOLLOW` on Unix. A credential basename is
+refused. A fake allow in the client journal does not change this file.
+The state file next to it stores SHA-256 of short phrases (1–3 words,
+8–200 bytes, at most 64 phrases and 32 results) and refuses a symlink.
+The phrase text is not stored.
+
+Shell on the hook still uses `execpolicy`. A shell allow also needs the
+human. Non-shell tools are judged on their arguments, so `Read` of
+`/etc/passwd` with no `--trusted` stays allow and `Read` of
+`~/.ssh/id_ed25519` does not. `policy check -c` without `--hook` does not
+ask on the terminal and does not write the log.
+
+The hook does not see an editor write, `git push`, the clipboard, the
+browser, or the request to the model provider. Those stay closed by the
+boundary admission reports: a container, no secret mounted, network
+`none`, and the hook and the policy outside the tree the agent writes.
+The same uid can still kill the hook process or skip the call. Skipping
+the call is not a pass. The tool server's own code can still open a file
+the arguments did not name. Isolation remains that control. `agent.hook-binding`
+still checks that PreToolUse names this binary with `--hook claude`. Wiring
+`claude-post` / `cursor-post` is the operator's hook config.

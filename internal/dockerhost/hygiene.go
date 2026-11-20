@@ -99,13 +99,14 @@ type EngineInfo struct {
 
 // Report is the result of a docker hygiene run.
 type Report struct {
-	Engine     *EngineInfo        `json:"engine,omitempty"`
-	Containers int                `json:"containers"`
-	Running    int                `json:"running"`
-	OK         bool               `json:"ok"`
-	Strict     bool               `json:"strict"`
-	Findings   []findings.Finding `json:"findings"`
-	Ignored    int                `json:"ignored,omitempty"`
+	SchemaVersion int                `json:"schema_version"`
+	Engine        *EngineInfo        `json:"engine,omitempty"`
+	Containers    int                `json:"containers"`
+	Running       int                `json:"running"`
+	OK            bool               `json:"ok"`
+	Strict        bool               `json:"strict"`
+	Findings      []findings.Finding `json:"findings"`
+	Ignored       int                `json:"ignored,omitempty"`
 }
 
 // Counts returns the number of findings per severity.
@@ -172,7 +173,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	if socket != "" && socket != "off" && !filepath.IsAbs(socket) {
 		return nil, fmt.Errorf("%w: docker socket must be an absolute path: %q", agent.ErrRefused, socket)
 	}
-	h := &hygiene{p: p, opt: opt, c: &findings.Collector{Ignore: p.Ignore}, rep: &Report{Strict: opt.Strict || p.Strict}}
+	h := &hygiene{p: p, opt: opt, c: &findings.Collector{Ignore: p.Ignore}, rep: &Report{SchemaVersion: findings.SchemaVersion, Strict: opt.Strict || p.Strict}}
 	h.daemonConfig()
 	h.group()
 	if socket != "off" {

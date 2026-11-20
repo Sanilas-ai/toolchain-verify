@@ -2,9 +2,11 @@ package hostsec
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
+	"github.com/Sanilas-ai/toolchain-verify/internal/dockerhost"
 	"github.com/Sanilas-ai/toolchain-verify/internal/findings"
 )
 
@@ -205,6 +207,59 @@ func checkNet(e *env, np *NetPolicy, opt Options, rep *Report, c *findings.Colle
 			}
 		}
 	}
+	noteDockerBypass(opt, c)
+}
+
+func noteDockerBypass(opt Options, c *findings.Collector) {
+	if opt.DockerSocket == "off" {
+		return
+	}
+	var ports []dockerhost.Published
+	switch {
+	case opt.DockerPorts != nil:
+		ports = *opt.DockerPorts
+	case opt.Root != "" && opt.Root != "/":
+		return // a fake root must not query the live engine
+	default:
+		getenv := opt.Getenv
+		if getenv == nil {
+			getenv = os.Getenv
+		}
+		var remote string
+		var err error
+		ports, remote, err = dockerhost.PublishedPorts(opt.DockerSocket, getenv)
+		if remote != "" {
+			c.Add(findings.Finding{Rule: "net.docker-remote", Severity: findings.SevInfo, Path: "docker",
+				Message: "DOCKER_HOST is not a local unix socket; it was not contacted"})
+		}
+		if err != nil {
+			c.Add(findings.Finding{Rule: "net.docker-unavailable", Severity: findings.SevInfo, Path: "docker",
+				Message: "local engine socket could not be queried: " + err.Error()})
+			return
+		}
+	}
+	seen := map[string]bool{}
+	for _, p := range ports {
+		ip := p.HostIP
+		if ip != "" && ip != "0.0.0.0" && ip != "::" && ip != "[::]" && ip != "::0" {
+			continue
+		}
+		key := p.Container + " " + p.HostPort + "/" + p.Proto
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		c.Add(findings.Finding{Rule: "net.docker-bypass", Severity: findings.SevFail, Path: "docker:" + p.Container,
+			Message: fmt.Sprintf("container %s publishes %s/%s on %s; Docker accepts this before ufw", p.Container, p.HostPort, p.Proto, orAll(ip)),
+			Fix:     "publish the port on 127.0.0.1 only, or do not publish it"})
+	}
+}
+
+func orAll(ip string) string {
+	if ip == "" {
+		return "0.0.0.0"
+	}
+	return ip
 }
 
 // matchingAllow returns the broadest allow rule for proto/port (from

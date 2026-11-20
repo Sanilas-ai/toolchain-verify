@@ -1,6 +1,7 @@
 package reposcan
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"path"
@@ -36,6 +37,9 @@ var bypassValues = map[string]string{
 var endpointKeys = regexp.MustCompile(`(?i)^(anthropic_base_url|anthropic_api_url|openai_base_url|openai_api_base|gemini_api_base|google_gemini_base_url|azure_openai_endpoint|http_proxy|https_proxy|all_proxy|node_options|ld_preload|pythonstartup|pythonpath|bash_env)$`)
 
 func (s *scanner) scanJSONConfig(rel, kind string, b []byte) {
+	if len(bytes.TrimSpace(b)) == 0 {
+		return // empty file: nothing is configured
+	}
 	root, dups, err := parseJSONC(b)
 	for _, d := range dups {
 		sev := SevWarn
@@ -47,8 +51,7 @@ func (s *scanner) scanJSONConfig(rel, kind string, b []byte) {
 			Fix:     "keep exactly one occurrence"})
 	}
 	if err != nil {
-		s.incomplete(rel + ": cannot parse: " + err.Error())
-		s.add(Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "config could not be parsed (" + err.Error() + "); its effect is unknown",
+		s.unparsed(rel, "cannot parse: "+err.Error(), Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "config could not be parsed (" + err.Error() + "); its effect is unknown",
 			Fix: "fix the syntax; a client with a lenient parser may still load parts of it"})
 		return
 	}
@@ -536,8 +539,7 @@ func (s *scanner) scanCodexConfig(rel string, b []byte) {
 	var doc map[string]any
 	md, err := toml.Decode(string(b), &doc)
 	if err != nil {
-		s.incomplete(rel + ": cannot parse: " + err.Error())
-		s.add(Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "Codex config could not be parsed: " + err.Error()})
+		s.unparsed(rel, "cannot parse: "+err.Error(), Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "Codex config could not be parsed: " + err.Error()})
 		return
 	}
 	_ = md
@@ -574,14 +576,16 @@ func (s *scanner) scanPackageHook(rel string, b []byte) {
 	base := strings.ToLower(path.Base(rel))
 	switch {
 	case base == "package.json":
+		if len(bytes.TrimSpace(b)) == 0 {
+			return // empty package.json: no scripts (npm refuses it anyway)
+		}
 		root, dups, err := parseJSONC(b)
 		for _, d := range dups {
 			s.add(Finding{Rule: "config.duplicate-key", Severity: SevWarn, Path: rel, Line: d.line, Evidence: escapeEvidence(d.key, 80),
 				Message: "duplicate key in package.json (npm keeps the last one)"})
 		}
 		if err != nil {
-			s.incomplete(rel + ": cannot parse: " + err.Error())
-			s.add(Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "package.json could not be parsed: " + err.Error()})
+			s.unparsed(rel, "cannot parse: "+err.Error(), Finding{Rule: "config.parse-error", Severity: SevWarn, Path: rel, Message: "package.json could not be parsed: " + err.Error()})
 			return
 		}
 		for _, scripts := range root.get("scripts", false) {

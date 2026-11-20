@@ -261,7 +261,9 @@ jobs:
 	rep := scan(t, root, Options{})
 	mustFind(t, rep, "gha.pwn-request", ".github/workflows/pr.yml", SevFail)
 	mustFind(t, rep, "gha.script-injection", ".github/workflows/pr.yml", SevFail)
-	mustFind(t, rep, "gha.unpinned-action", ".github/workflows/pr.yml", SevWarn)
+	// Only GitHub's own actions/checkout@v4 is unpinned: aggregated info
+	// (scan-tuning-1117); third-party tags stay warn (TestUnpinnedAggregation).
+	mustFind(t, rep, "gha.unpinned-action", ".github/workflows/pr.yml", SevInfo)
 
 	benign := t.TempDir()
 	write(t, benign, ".github/workflows/ci.yml", `on: [push, pull_request]

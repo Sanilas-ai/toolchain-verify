@@ -189,3 +189,88 @@ func verdictFor(s map[string]bool, control bool) (rule, sev string) {
 	}
 	return "", ""
 }
+
+// InjectionVerdict is the injection rule for a chunk of untrusted text.
+// control is true when an agent will load the text as instructions.
+func InjectionVerdict(text string, control bool) (rule, sev string) {
+	rule, sev = verdictFor(signals(canonical(text)), control)
+	return adjustPipe(text, rule, sev)
+}
+
+// adjustPipe demotes injection.pipe-to-shell to info when the match is only
+// inside a fenced code block, or the same sentence negates it
+// (never / don't / не / никогда). Security docs quote `curl | sh`.
+func adjustPipe(part, rule, sev string) (string, string) {
+	if rule != "injection.pipe-to-shell" || sev != SevFail {
+		return rule, sev
+	}
+	if pipeOnlyInFence(part) || pipeSentenceNegated(part) {
+		return rule, SevInfo
+	}
+	return rule, sev
+}
+
+func pipeOnlyInFence(part string) bool {
+	re := signalRe(sigPipeShell)
+	if re == nil || !re.MatchString(canonical(part)) {
+		return false
+	}
+	return !re.MatchString(canonical(stripFences(part)))
+}
+
+func stripFences(part string) string {
+	var b strings.Builder
+	in := false
+	for _, line := range strings.Split(part, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			in = !in
+			continue
+		}
+		if !in {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+var pipeNegRe = regexp.MustCompile(`(?i)(^|[^[:alnum:]_])(never|don't|dont|do not|никогда|не)([^[:alnum:]_]|$)`)
+
+func pipeSentenceNegated(part string) bool {
+	canon := canonical(part)
+	re := signalRe(sigPipeShell)
+	if re == nil {
+		return false
+	}
+	loc := re.FindStringIndex(canon)
+	if loc == nil {
+		return false
+	}
+	start := 0
+	for i := loc[0] - 1; i >= 0; i-- {
+		switch canon[i] {
+		case '.', '\n', '!', '?':
+			start = i + 1
+			i = -1
+		}
+	}
+	end := len(canon)
+	for i := loc[1]; i < len(canon); i++ {
+		switch canon[i] {
+		case '.', '\n', '!', '?':
+			end = i
+			i = len(canon)
+		}
+	}
+	return pipeNegRe.MatchString(canon[start:end])
+}
+
+func signalRe(name string) *regexp.Regexp {
+	for _, d := range sigDefs {
+		if d.name == name {
+			return d.re
+		}
+	}
+	return nil
+}

@@ -143,6 +143,71 @@ func socketCandidates(explicit string, getenv func(string) string) (socks []stri
 	return out, remote
 }
 
+// Published is one host port a container publishes.
+type Published struct {
+	Container string
+	HostIP    string
+	HostPort  string
+	Proto     string
+}
+
+// PublishedPorts lists host port bindings via GET on a local engine socket.
+// explicit "off" queries nothing. A remote DOCKER_HOST is returned in remote
+// and never contacted. err is set only when a local socket was found but
+// the GET failed.
+func PublishedPorts(explicit string, getenv func(string) string) (ports []Published, remote string, err error) {
+	if explicit == "off" || getenv == nil {
+		return nil, "", nil
+	}
+	socks, remote := socketCandidates(explicit, getenv)
+	var sock string
+	for _, s := range socks {
+		if isSocket(s) {
+			sock = s
+			break
+		}
+	}
+	if sock == "" {
+		return nil, remote, nil
+	}
+	eng := newEngine(sock, 3*time.Second)
+	var sums []apiContainerSummary
+	if err = eng.get("/containers/json?all=1", &sums); err != nil {
+		return nil, remote, err
+	}
+	for _, sum := range sums {
+		if len(sum.ID) < 12 || strings.IndexFunc(sum.ID, func(r rune) bool {
+			return (r < '0' || r > '9') && (r < 'a' || r > 'f')
+		}) >= 0 {
+			continue
+		}
+		var c apiContainer
+		if err = eng.get("/containers/"+sum.ID+"/json", &c); err != nil {
+			return nil, remote, err
+		}
+		name := containerName(c, sum)
+		add := func(key string, binds []apiPortBinding) {
+			proto := "tcp"
+			if i := strings.LastIndex(key, "/"); i >= 0 {
+				proto = key[i+1:]
+			}
+			for _, b := range binds {
+				if b.HostPort == "" {
+					continue
+				}
+				ports = append(ports, Published{Container: name, HostIP: b.HostIP, HostPort: b.HostPort, Proto: proto})
+			}
+		}
+		for k, binds := range c.NetworkSettings.Ports {
+			add(k, binds)
+		}
+		for k, binds := range c.HostConfig.PortBindings {
+			add(k, binds)
+		}
+	}
+	return ports, remote, nil
+}
+
 func isSocket(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.Mode()&os.ModeSocket != 0

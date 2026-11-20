@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sanilas-ai/toolchain-verify/internal/dockerhost"
 	"github.com/Sanilas-ai/toolchain-verify/internal/findings"
 )
 
@@ -62,23 +63,31 @@ type Options struct {
 	// otherwise).
 	SS     []byte
 	Strict bool
-	Now    func() time.Time
+	// DockerSocket is "off" to skip the engine, empty to try the local
+	// socket, or an absolute socket path. A remote DOCKER_HOST is never
+	// contacted. DockerPorts, when non-nil, is used instead of a live query
+	// (tests).
+	DockerSocket string
+	DockerPorts  *[]dockerhost.Published
+	Getenv       func(string) string
+	Now          func() time.Time
 	// Groups returns the current user's group names.
 	Groups func() ([]string, error)
 }
 
 // Report is the result of a run.
 type Report struct {
-	OS       string             `json:"os,omitempty"`
-	Codename string             `json:"codename,omitempty"`
-	Kernel   *Kernel            `json:"kernel,omitempty"`
-	Apt      *AptState          `json:"apt,omitempty"`
-	Net      *NetState          `json:"net,omitempty"`
-	Vps      *VpsState          `json:"vps,omitempty"`
-	OK       bool               `json:"ok"`
-	Strict   bool               `json:"strict"`
-	Findings []findings.Finding `json:"findings"`
-	Ignored  int                `json:"ignored,omitempty"`
+	SchemaVersion int                `json:"schema_version"`
+	OS            string             `json:"os,omitempty"`
+	Codename      string             `json:"codename,omitempty"`
+	Kernel        *Kernel            `json:"kernel,omitempty"`
+	Apt           *AptState          `json:"apt,omitempty"`
+	Net           *NetState          `json:"net,omitempty"`
+	Vps           *VpsState          `json:"vps,omitempty"`
+	OK            bool               `json:"ok"`
+	Strict        bool               `json:"strict"`
+	Findings      []findings.Finding `json:"findings"`
+	Ignored       int                `json:"ignored,omitempty"`
 }
 
 // env reads files below a root.
@@ -145,7 +154,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	}
 	e := &env{root: opt.Root, now: opt.Now()}
 	c := &findings.Collector{Ignore: p.Ignore}
-	rep := &Report{Strict: opt.Strict || p.Strict}
+	rep := &Report{SchemaVersion: findings.SchemaVersion, Strict: opt.Strict || p.Strict}
 	rep.OS, rep.Codename = osRelease(e)
 	dpkg := readDpkgStatus(e)
 	if opt.Apt {

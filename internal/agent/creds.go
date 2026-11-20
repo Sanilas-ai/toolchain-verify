@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -59,5 +60,32 @@ func checkCredentials(r *resolved, c *collector) {
 		c.add(Finding{Rule: "cred.env", Severity: SevInfo,
 			Message: "secrets exported in this environment (names only): " + strings.Join(exposed, ", ") + "; every agent tool call and stdio MCP server inherits them",
 			Fix:     "pass credentials only to the specific tool that needs them (per-exec env), not to the agent session"})
+	}
+}
+
+// checkTranscriptPerms stats session directories only. World-readable or a
+// foreign owner fails. The journal itself is not opened here.
+func checkTranscriptPerms(r *resolved, c *collector) {
+	for _, d := range []string{
+		filepath.Join(r.home, ".claude", "projects"),
+		filepath.Join(r.home, ".codex", "sessions"),
+		filepath.Join(r.home, ".cursor", "projects"),
+	} {
+		st, err := os.Lstat(d)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		mode := st.Mode().Perm()
+		// Windows reports directories as 0777. Those bits are not Unix
+		// permissions, and ACL inspection is out of scope.
+		if runtime.GOOS != "windows" && mode&0o005 != 0 {
+			c.add(Finding{Rule: "cred.transcript-perms", Severity: SevFail, Path: d,
+				Message: fmt.Sprintf("agent session directory is accessible to other users (%04o)", mode),
+				Fix:     "chmod 700 " + d})
+		}
+		if uid, ok := fileUID(st); ok && r.uid >= 0 && uid != r.uid {
+			c.add(Finding{Rule: "cred.transcript-perms", Severity: SevFail, Path: d,
+				Message: "agent session directory is owned by another user"})
+		}
 	}
 }

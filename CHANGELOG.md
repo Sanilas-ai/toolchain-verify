@@ -6,6 +6,45 @@ this project uses [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (scan tuning after the 2026-11-16 mass scan and manual review)
+- `ci.agent-publish-token` fires only when the job actually runs an agent:
+  `uses:` of a known agent action, or a shell command whose command word
+  (after env/sudo/timeout/npx/uvx/pnpm dlx/pipx run/uv run/bash -c/
+  python -m) is an agent CLI. Image names, npm package names in publish
+  steps, Co-authored-by trailers, comments, echo strings, heredoc bodies and
+  setup-only calls (`--version`, `login`, `mcp`) no longer count.
+- `ci.agent-publish-token` is graded: **fail** for an untrusted trigger
+  (issue_comment, issues, pull_request_target, pull_request_review*,
+  discussion*, workflow_run) without an author_association/actor filter and
+  without a built-in write check, or `allowed_non_write_users: "*"`;
+  **warn** when gated to OWNER/MEMBER/COLLABORATOR, when the only protection
+  is inside the action (claude-code-action write-permission check), or for
+  other triggers with publish secrets / contents|packages write; **info**
+  for trusted triggers only (dispatch, schedule, push, release) with just
+  `id-token: write` and read-only contents.
+- `gha.unpinned-action`: one finding per workflow file (count, actions in
+  evidence); warn if a third-party action is unpinned, info if only
+  `actions/*` / `github/*`. A third-party tag in a job with secrets or a
+  write token under an untrusted trigger stays a separate warn.
+- `unicode.bidi-control`: one finding per file; docs, translation catalogs
+  (`.po`/`.mo`/`.xliff`, `locale/`, `i18n/`, `translations/`) and test
+  fixture data are info. `unicode.zero-width`: info there unless a run of
+  4+; ZWSP word breaks in Khmer/Thai/Lao/Myanmar/Tibetan/CJK are not
+  counted. Control files, workflows and code keep their severity.
+- `agent.recursive-clone`: one finding per file; the message states that
+  the risk is real only where git is older than 2.56.1.
+- Broken structured files inside test/fixture trees (invalid package.json
+  fixtures in node, bun, deno, eslint, trivy) are info and listed in
+  `coverage.unparsed_fixtures` instead of making the scan INCOMPLETE;
+  `--strict-coverage` keeps them INCOMPLETE. Empty package.json/JSON configs
+  are skipped.
+- New `ci.agent-untrusted-trigger` (info): an agent really runs on an
+  untrusted trigger with read-only permissions and no publish secrets and
+  without an author_association/actor filter; prompt injection can still
+  steer its output/comments and spend the API key.
+- `snapshots/`, `__snapshots__/` and `*.snap` (insta, jest) count as test
+  data for `unicode.*` and `coverage.unparsed_fixtures`.
+
 ### Added
 - Threat-intel rules, November 2026 ([docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md)):
   - `host apps` (opt-in group, also in `host all`): `host.vscode-cve-2026-120779` (VS Code
@@ -51,6 +90,40 @@ this project uses [SemVer](https://semver.org/).
   Manifest violations fail. Matching single-file code heuristics warn; they run on
   Python/JS/TS/Go files that call an LLM client. `agent.write-manifest` reports an
   unparsable manifest (warn, INCOMPLETE) or one with no write tools (info).
+- Session trace (`trace`, `trace watch`) reads a Claude, Codex, or Cursor
+  journal and fails on a shell call the exec policy rejects, a credential
+  or out-of-root path, or an untrusted tool-result span that reappears in
+  an outbound or write argument. The journal line is untrusted input: the
+  verdict is the process exit code, not a second model.
+- `posture` runs admission, pre-session, exec-policy validate, mcp-lock
+  verify, and the advisory-database age check. The exit status is the worst
+  of the five. Admission (`--agent-env`, `--agent-netns`) fails closed on a
+  missing `none` network, a required container that this process is not in,
+  a credential this uid can open, a hook or exec policy this uid can append,
+  or a secret name in the supplied env file. `/proc/*/environ` is not read.
+- `policy check --hook` is the action pipeline: mediator log
+  (`--mediate-log`, outside `--repo`, rule, verdict, tool name, subject; no
+  argument text), `--allow-subject`, a human `yes` on `/dev/tty` or
+  `--approve` for a shell allow, `pipeline.path` / `pipeline.class` on
+  arguments, and `claude-post` / `cursor-post` to scrub a tool result and
+  remember an untrusted result as hashes keyed by `tool_use_id`
+  (`pipeline.flow`). `policy check -c` without `--hook` does not ask on the
+  terminal and does not write the log. `trace` stays the client journal.
+- `toolcall scrub` strips hidden Unicode from a tool result and fails when
+  an injection verdict remains. `scan --files -` scans only the paths on
+  stdin. `policy check --follow-script` judges one script file inside the
+  working directory. `agent --pin-instructions` / `--instructions-lock`
+  hashes the instruction files an agent will load.
+- Verifier fixes: negated or fenced `curl | sh` is info; an unexpanded
+  argv[0] (including after sudo/env) is deny; `toolchain-verify:sandboxed`
+  counts only on the call line next to a named wrapper, and a function that
+  contains a sink is a dirty name; reports carry `schema_version` 1;
+  a Docker port published on 0.0.0.0 or :: is `net.docker-bypass`; an
+  advisory database older than `db_max_age_days` (default 45) is
+  `policy.db-stale`; Windows opens refuse reparse points; a Claude or
+  Cursor settings file without this binary is `agent.hook-missing` or
+  `agent.hook-substituted`; world-readable session directories are
+  `cred.transcript-perms`.
 - Agent sandbox-isolation rules (`agent`): `agent.sandbox-approval-matrix`
   models the Codex `sandbox_mode` × `approval_policy` grid (danger-full-access
   + never = critical fail); `agent.no-isolation` flags Anthropic
@@ -85,8 +158,9 @@ this project uses [SemVer](https://semver.org/).
   secrets or `id-token`/`contents`/`packages: write`).
 - Findings of `host` and `scan` carry a `cwe` list in JSON; `-v` prints it.
 - Docs: `docs/agent-isolation.md` (rules + Codex sandbox×approval reference
-  matrix + CWE mapping); agent-trace analysis backlog in `DESIGN.md`
-  (Invariant source→sink, TaskTracker probes, NeMo Guardrails comparison);
+  matrix + CWE mapping, and the action pipeline); `DESIGN.md` records the
+  shipped hook pipeline, the trace, and the verifier fixes (TaskTracker
+  probes and a NeMo Colang comparison stay research);
   agent tool update cooldown (~48 h) guidance; MCP governance gateways
   (ContextForge, Lunar MCPX, Agent Governance Toolkit, MCP-Defender) in the DESIGN backlog.
 

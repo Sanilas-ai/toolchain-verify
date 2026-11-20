@@ -15,7 +15,7 @@ import (
 
 func cmdToolcall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, `usage: toolchain-verify toolcall <parse|bench|grounded|profiles|stops> ...`)
+		fmt.Fprintln(stderr, `usage: toolchain-verify toolcall <parse|bench|grounded|scrub|profiles|stops> ...`)
 		return 2
 	}
 	switch args[0] {
@@ -25,6 +25,8 @@ func cmdToolcall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return cmdToolcallBench(args[1:], stdout, stderr)
 	case "grounded":
 		return cmdToolcallGrounded(args[1:], stdin, stdout, stderr)
+	case "scrub":
+		return cmdToolcallScrub(args[1:], stdin, stdout, stderr)
 	case "profiles":
 		return cmdToolcallProfiles(stdout, stderr)
 	case "stops":
@@ -317,4 +319,34 @@ func mapStatus(res *toolcall.Result) int {
 	default:
 		return 1
 	}
+}
+
+func cmdToolcallScrub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("toolcall scrub", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	asJSON := fs.Bool("json", false, "JSON report (includes the cleaned text)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	input, err := readInput(fs.Arg(0), stdin)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 2
+	}
+	rep := toolcall.Scrub(string(input))
+	if *asJSON {
+		writeJSON(stdout, rep)
+	} else {
+		fmt.Fprint(stdout, rep.Text)
+		if !strings.HasSuffix(rep.Text, "\n") {
+			fmt.Fprintln(stdout)
+		}
+		for _, rule := range rep.Rules {
+			fmt.Fprintf(stderr, "scrub: %s\n", rule)
+		}
+	}
+	if rep.OK {
+		return 0
+	}
+	return 1
 }

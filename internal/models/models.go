@@ -55,15 +55,16 @@ type Artifact struct {
 
 // Report is the result of a run.
 type Report struct {
-	OK        bool               `json:"ok"`
-	Strict    bool               `json:"strict"`
-	Roots     []string           `json:"roots"`
-	Artifacts []Artifact         `json:"artifacts"`
-	Scanners  map[string]string  `json:"scanners"`
-	Ollama    *OllamaReport      `json:"ollama,omitempty"`
-	Truncated bool               `json:"truncated,omitempty"`
-	Findings  []findings.Finding `json:"findings"`
-	Ignored   int                `json:"ignored,omitempty"`
+	SchemaVersion int                `json:"schema_version"`
+	OK            bool               `json:"ok"`
+	Strict        bool               `json:"strict"`
+	Roots         []string           `json:"roots"`
+	Artifacts     []Artifact         `json:"artifacts"`
+	Scanners      map[string]string  `json:"scanners"`
+	Ollama        *OllamaReport      `json:"ollama,omitempty"`
+	Truncated     bool               `json:"truncated,omitempty"`
+	Findings      []findings.Finding `json:"findings"`
+	Ignored       int                `json:"ignored,omitempty"`
 }
 
 // ErrRefused is returned for scan roots that would walk the whole system.
@@ -129,7 +130,7 @@ func Run(pol *Policy, opt Options) (*Report, error) {
 		ext = opt.External
 	}
 	c := &findings.Collector{Ignore: pol.Ignore}
-	rep := &Report{Strict: opt.Strict, Scanners: map[string]string{}}
+	rep := &Report{SchemaVersion: findings.SchemaVersion, Strict: opt.Strict, Scanners: map[string]string{}}
 
 	// 1. scan roots
 	var roots []string
