@@ -46,6 +46,50 @@ this project uses [SemVer](https://semver.org/).
   data for `unicode.*` and `coverage.unparsed_fixtures`.
 
 ### Added
+- Threat-intel rules, November 2026 ([docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md)):
+  - `host apps` (opt-in group, also in `host all`): `host.vscode-cve-2026-120779` (VS Code
+    < 1.145.3), `host.llama-server-stale` (llama.cpp < b12340 via `--llama-version`),
+    `host.ide-extension-denylist` (built-in: trojanized `anthropic.claude-code` 2.1.312 and
+    2.1.313; extend with `[host.apps] extension_denylist`), `host.ssh-ioc-key`.
+  - `host --authorized-keys-baseline FILE`: `host.authorized-keys-baseline` fails every
+    authorized key that is not in the baseline. Keys are never printed.
+  - `agent`: GPUStack advisories (CVE-2026-102895 in KEV, CVE-2026-102894); every
+    version below 2.2.2 fails as critical. `mcp.remote-no-auth` warns on a remote MCP
+    server with no client authentication (BluePhishing).
+  - `scan`: `gha.secrets-dump` (`toJSON(secrets)`), `gha.log-tamper` (deleting runs or
+    logs), `gha.secret-echo`, `gha.unpinned-npx` (wfx-loot, npm hijack) and
+    `ci.agent-untrusted-prompt` (AI agent on issue/comment/fork-PR triggers).
+  - `models`: `require_allow = true` makes a reviewed SHA-256 manifest mandatory
+    (`models.not-allowlisted`).
+- Threat-intel rules from the 2026-11-16 weekly plan:
+  - `host secrets` (new group, on demand, not in `host all`): `host.secret-file` (HF,
+    GitHub, AI-API, npm/PyPI tokens, exchange API keys, wallet seeds, git credentials in
+    well-known files; kind + redacted prefix only), `host.secret-env` (names only) and
+    `host.exchange-key-forbidden` (fail on hosts with `[host.secrets]
+    forbid_exchange_keys = true` or `--sandbox-host`).
+  - `host apps`: `host.chrome-cve-2026-125350` (Chrome/Chromium < 157.0.8103.50, KEV;
+    `--chrome-version`), `host.php-cve-2026-109618` (PHP < 8.2.35/8.3.36/8.4.27/8.5.12 or
+    EOL; `--php-version`), `host.path-user-writable` and `host.path-shadow` (`--path`),
+    `host.version-manager-tamper` (pyenv/rbenv/nodenv dispatcher or shim, Homebrew links),
+    `host.ide-extension-autoupdate`.
+  - `agent`: blocklist entries for fake MCP packages `karma365-mcp` (npm), `dynamic-mcp`,
+    `teamviewer-mcp-server`, `mcp-teamviewer` (PyPI); `mcp.blocklisted-package` matches MCP
+    launch commands against the blocklist and the new `mcp_denylist`; `mcp.not-reviewed`
+    enforces `mcp_reviewed` (exact reviewed specs).
+- Agent write rules (`scan`) for agents with write/mutating tools, driven by an
+  `agent-capabilities.toml`/`.json` manifest (new control-file kind, see
+  [docs/design/agent-write-rules.md](docs/design/agent-write-rules.md)):
+  - `agent.write-policy-code-derived`: the write admission policy must be derived from tool
+    schemas (`write_policy.source = "schema"`);
+  - `agent.write-plan-frozen-pre-untrusted`: the write plan is frozen before the first
+    untrusted read (`write_plan.frozen_before_untrusted_read = true`, no
+    `expand_after_untrusted`);
+  - `agent.write-args-from-user`: sensitive write arguments (`role` recipient / content /
+    amount / destination, or `sensitive = true`) need `source = "user"` or `human_confirm`.
+
+  Manifest violations fail. Matching single-file code heuristics warn; they run on
+  Python/JS/TS/Go files that call an LLM client. `agent.write-manifest` reports an
+  unparsable manifest (warn, INCOMPLETE) or one with no write tools (info).
 - Session trace (`trace`, `trace watch`) reads a Claude, Codex, or Cursor
   journal and fails on a shell call the exec policy rejects, a credential
   or out-of-root path, or an untrusted tool-result span that reappears in
@@ -102,6 +146,12 @@ this project uses [SemVer](https://semver.org/).
   `host.ssh-exposed`, `host.no-bruteforce-protection`, `host.ntp-unsynced`
   (`--timedatectl`) and `host.git-cve-2026-111760` (`--git-version`, distro backports
   recognised from `changelog.Debian.gz`). Still read-only; no command is executed.
+- `host vps`: `host.sshd-effective` also fails on keyboard-interactive login with PAM
+  (`KbdInteractiveAuthentication` / `ChallengeResponseAuthentication` yes + `UsePAM yes`).
+  New rules `host.sudoers-nopasswd`, `host.authorized-keys-hygiene` and
+  `host.listeners-policy` (allowlist via `[host.listen]` or `--listen-policy FILE`, or an
+  info inventory). Docs: [fresh VPS checklist](docs/vps-fresh-image-checklist.md) with a
+  note on vanilla WireGuard behind DPI.
 - `scan`: `agent.recursive-clone` (recursive submodule clones in agent instructions,
   scripts, Makefiles and workflows, including `actions/checkout` `submodules: recursive`)
   and `ci.agent-publish-token` (an AI coding agent in a job that can reach publish

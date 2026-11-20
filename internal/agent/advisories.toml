@@ -31,7 +31,7 @@
 #   ecosystem, name, reason, refs
 
 schema = 1
-updated = "2026-11-02"
+updated = "2026-11-16"
 
 # ---------------------------------------------------------------- stacks
 
@@ -71,6 +71,14 @@ ecosystem = "pypi"
 packages = ["langalpha"]
 can_exec = true
 notes = "Package name match is a heuristic; verify how you installed it. No fixed release listed."
+
+[[stack]]
+name = "gpustack"
+ecosystem = "pypi"
+packages = ["gpustack"]
+docker_images = ["gpustack/gpustack"]
+can_exec = true
+notes = "Admins can register inference backends from YAML (code execution on workers). Keep the API behind a VPN or authenticated gateway, strip client X-GPUStack-Real-IP, recreate the container after upgrading and revoke unknown admin API keys."
 
 # ------------------------------------------------------------ Flowise
 
@@ -246,3 +254,56 @@ refs = ["https://www.cve.org/CVERecord?id=CVE-2026-109440", "https://cyber-threa
 # name = "example-malicious-package"
 # reason = "malware: exfiltrates tokens on install"
 # refs = ["https://github.com/advisories/GHSA-xxxx-xxxx-xxxx"]
+
+# Fake MCP servers (November 2026). Also matched against MCP server launch
+# commands (npx/uvx/pipx/uv tool run) as mcp.blocklisted-package.
+[[blocklist]]
+ecosystem = "npm"
+name = "karma365-mcp"
+reason = "malware: fake MCP server (OSV MAL-2026-19235)"
+refs = ["https://github.com/advisories/GHSA-72xc-q3v8-7grp"]
+
+[[blocklist]]
+ecosystem = "pypi"
+name = "dynamic-mcp"
+reason = "malware: fake MCP server opening a reverse cloudflared tunnel"
+refs = ["https://corgea.com/research/dynamic-mcp-labelearthengine-api-reqnest-mcp-teamviewer-pypi-november-2026"]
+
+[[blocklist]]
+ecosystem = "pypi"
+name = "teamviewer-mcp-server"
+reason = "malware: fake TeamViewer MCP server"
+refs = ["https://github.com/advisories/GHSA-v98v-h2h9-7j3h", "https://corgea.com/research/dynamic-mcp-labelearthengine-api-reqnest-mcp-teamviewer-pypi-november-2026"]
+
+[[blocklist]]
+ecosystem = "pypi"
+name = "mcp-teamviewer"
+reason = "malware: fake TeamViewer MCP server"
+refs = ["https://github.com/advisories/GHSA-w2mh-fxh2-j425", "https://corgea.com/research/dynamic-mcp-labelearthengine-api-reqnest-mcp-teamviewer-pypi-november-2026"]
+
+# ------------------------------------------------------------ GPUStack
+
+[[advisory]]
+id = "GHSA-gj9m-f8ph-pmhr"
+aliases = ["CVE-2026-102895"]
+stack = "gpustack"
+affected = "<2.2.0"
+fixed = "2.2.0"
+severity = "critical"
+summary = "Unauthenticated admin via trusted loopback source (same-host reverse proxy or forged X-GPUStack-Real-IP); exploited in the wild, in CISA KEV since 2026-11-09. 2.2.0 fixes it; 2.2.2 is the floor that also closes the SAML bypass."
+refs = [
+  "https://github.com/advisories/GHSA-gj9m-f8ph-pmhr",
+  "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+]
+
+[[advisory]]
+id = "GHSA-62m9-f875-rqw6"
+aliases = ["CVE-2026-102894"]
+stack = "gpustack"
+affected = ">=0.7.1, <2.2.2"
+fixed = "2.2.2"
+severity = "critical"
+summary = "SAML callback issues a session without validating signature, issuer, audience or time (no credentials needed; SAML need not be configured). Pairs with the KEV loopback bypass."
+refs = [
+  "https://github.com/advisories/GHSA-62m9-f875-rqw6",
+]

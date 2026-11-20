@@ -339,3 +339,23 @@ func TestOllamaHostEnv(t *testing.T) {
 		t.Errorf("default: %s", u)
 	}
 }
+
+func TestRequireAllow(t *testing.T) {
+	dir := t.TempDir()
+	st := safetensors(t, map[string]any{"w": map[string]any{"dtype": "U8", "shape": []int{2}, "data_offsets": []int{0, 2}}}, []byte{1, 2})
+	ok := write(t, filepath.Join(dir, "reviewed.safetensors"), st)
+	bad := write(t, filepath.Join(dir, "new.gguf"), gguf(nil, nil, 0, 0))
+	write(t, filepath.Join(dir, "notes.txt"), []byte("not a model"))
+	no := false
+	pol := &Policy{RequireAllow: true, Hash: &no, Allow: []Allow{{SHA256: sum(st), Note: "reviewed"}}}
+	rep := scan(t, pol, dir)
+	if f := find(rep, "models.not-allowlisted", bad); f == nil || f.Severity != findings.SevFail {
+		t.Errorf("unlisted GGUF not failed:\n%s", dump(rep))
+	}
+	if find(rep, "models.not-allowlisted", ok) != nil || find(rep, "models.not-allowlisted", "notes.txt") != nil {
+		t.Errorf("allowlisted or non-model flagged:\n%s", dump(rep))
+	}
+	if find(scan(t, nil, dir), "models.not-allowlisted", bad) != nil {
+		t.Error("flagged without require_allow")
+	}
+}

@@ -162,7 +162,11 @@ behind security fixes and which listening services the firewall does not account
 | Service reachable from anywhere | `net.exposed`, `net.public-listener`, `net.no-firewall`, `net.ufw-inactive`, `net.ufw-default-allow` |
 | Stale firewall holes | `net.allow-unused` |
 | Provider image template: shared SSH host keys (MITM across all VMs of the image), DSA | `host.ssh-hostkeys-template` (`host vps`) |
-| Password / root SSH login left on by cloud-init drop-ins | `host.sshd-effective` (first value wins across `Include`) |
+| Password / root SSH login left on by cloud-init drop-ins, incl. keyboard-interactive through PAM | `host.sshd-effective` (first value wins across `Include`) |
+| Passwordless root via sudo (cloud-init `90-cloud-init-users`) | `host.sudoers-nopasswd` |
+| Weak, duplicated or unrestricted root SSH keys | `host.authorized-keys-hygiene` |
+| Unexpected listener on a public interface | `host.listeners-policy` (allowlist in the manifest or `--listen-policy`) |
+| Vanilla WireGuard classified by DPI | not detected; guidance in [docs/vps-fresh-image-checklist.md](docs/vps-fresh-image-checklist.md) |
 | Internet-facing server without firewall, brute-force protection, auto-updates, time sync | `host.firewall-off`, `host.ssh-exposed`, `host.no-bruteforce-protection`, `host.no-auto-updates`, `host.kernel-stale`, `host.ntp-unsynced` |
 | git CVE-2026-111760 (code execution on recursive clone) | `host.git-cve-2026-111760` |
 

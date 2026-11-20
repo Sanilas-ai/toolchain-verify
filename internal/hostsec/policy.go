@@ -19,6 +19,12 @@ type Policy struct {
 	// KernelFloors are minimum running-kernel versions, typically one per
 	// CVE that must be patched ([[host.kernel_floor]]).
 	KernelFloors []KernelFloor `toml:"kernel_floor"`
+	// Listen is the externally reachable listener allowlist ([host.listen]).
+	Listen *ListenPolicy `toml:"listen"`
+	// Apps configures the apps group ([host.apps]).
+	Apps *AppsPolicy `toml:"apps"`
+	// Secrets configures the on-demand secrets group ([host.secrets]).
+	Secrets *SecretsPolicy `toml:"secrets"`
 	// Ignore suppresses findings: "rule" or "rule:path-glob".
 	Ignore []string `toml:"ignore"`
 	// Strict makes warnings fail the run.
@@ -61,6 +67,13 @@ type KernelFloor struct {
 	// Severity of a running kernel below Min: "fail" (default) or "warn".
 	Severity string   `toml:"severity"`
 	Refs     []string `toml:"refs"`
+}
+
+// ListenPolicy lists the ports that may listen outside loopback
+// ([host.listen], used by host.listeners-policy in the vps group).
+type ListenPolicy struct {
+	// Allowed are port specs: "22/tcp", "443/udp", "51820/udp".
+	Allowed []string `toml:"allowed"`
 }
 
 // NetPolicy tunes the listener/ufw reconciliation ([host.net]).
@@ -156,6 +169,20 @@ func (p *Policy) Validate() error {
 		}
 		if f.Severity != "" && f.Severity != "fail" && f.Severity != "warn" {
 			return fmt.Errorf("%s: severity must be \"fail\" or \"warn\"", where)
+		}
+	}
+	if p.Apps != nil {
+		for _, s := range p.Apps.ExtensionDenylist {
+			if _, _, err := ParseExtensionSpec(s); err != nil {
+				return fmt.Errorf("host.apps: %w", err)
+			}
+		}
+	}
+	if p.Listen != nil {
+		for _, s := range p.Listen.Allowed {
+			if _, err := ParsePortSpec(s); err != nil {
+				return fmt.Errorf("host.listen: %w", err)
+			}
 		}
 	}
 	if p.Net != nil {
