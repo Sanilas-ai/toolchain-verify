@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/Sanilas-ai/toolchain-verify/internal/hostsec"
 	"github.com/Sanilas-ai/toolchain-verify/internal/manifest"
 )
@@ -49,6 +51,7 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	timedatectl := fs.String("timedatectl", "", "vps: file with `timedatectl show` output (\"-\" = stdin)")
 	gitVersion := fs.String("git-version", "", "vps: file with `git --version` output (\"-\" = stdin); default: the dpkg git version")
 	nft := fs.String("nft", "", "vps: file with `sudo nft list ruleset` output (\"-\" = stdin)")
+	listenPolicy := fs.String("listen-policy", "", "vps: TOML file with `allowed = [\"22/tcp\", ...]` (or a [host.listen] section): ports that may listen outside loopback")
 	strict := fs.Bool("strict", false, "warnings fail the run")
 	asJSON := fs.Bool("json", false, "print a JSON report")
 	verbose := fs.Bool("v", false, "verbose: also print info findings and fixes")
@@ -121,6 +124,12 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var pol *hostsec.Policy
 	if m != nil {
 		pol = m.Host
+	}
+	if *listenPolicy != "" {
+		if opt.ListenAllowed, err = loadListenPolicy(*listenPolicy); err != nil {
+			fmt.Fprintln(stderr, "error: --listen-policy:", err)
+			return 2
+		}
 	}
 	rep, err := hostsec.Run(pol, opt)
 	if err != nil {
@@ -195,4 +204,29 @@ func dashIfEmpty(s string) string {
 		return "default"
 	}
 	return s
+}
+
+// loadListenPolicy reads `allowed = [...]` or `[host.listen] allowed = [...]`.
+func loadListenPolicy(p string) ([]string, error) {
+	var doc struct {
+		Allowed []string `toml:"allowed"`
+		Host    struct {
+			Listen struct {
+				Allowed []string `toml:"allowed"`
+			} `toml:"listen"`
+		} `toml:"host"`
+	}
+	if _, err := toml.DecodeFile(p, &doc); err != nil {
+		return nil, err
+	}
+	out := append(doc.Allowed, doc.Host.Listen.Allowed...)
+	for _, s := range out {
+		if _, err := hostsec.ParsePortSpec(s); err != nil {
+			return nil, err
+		}
+	}
+	if out == nil {
+		out = []string{} // an empty policy allows nothing
+	}
+	return out, nil
 }

@@ -29,6 +29,12 @@ this project uses [SemVer](https://semver.org/).
   `host.ssh-exposed`, `host.no-bruteforce-protection`, `host.ntp-unsynced`
   (`--timedatectl`) and `host.git-cve-2026-111760` (`--git-version`, distro backports
   recognised from `changelog.Debian.gz`). Still read-only; no command is executed.
+- `host vps`: `host.sshd-effective` also fails on keyboard-interactive login with PAM
+  (`KbdInteractiveAuthentication` / `ChallengeResponseAuthentication` yes + `UsePAM yes`).
+  New rules `host.sudoers-nopasswd`, `host.authorized-keys-hygiene` and
+  `host.listeners-policy` (allowlist via `[host.listen]` or `--listen-policy FILE`, or an
+  info inventory). Docs: [fresh VPS checklist](docs/vps-fresh-image-checklist.md) with a
+  note on vanilla WireGuard behind DPI.
 - `scan`: `agent.recursive-clone` (recursive submodule clones in agent instructions,
   scripts, Makefiles and workflows, including `actions/checkout` `submodules: recursive`)
   and `ci.agent-publish-token` (an AI coding agent in a job that can reach publish
