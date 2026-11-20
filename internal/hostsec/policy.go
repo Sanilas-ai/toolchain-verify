@@ -23,6 +23,8 @@ type Policy struct {
 	Listen *ListenPolicy `toml:"listen"`
 	// Apps configures the apps group ([host.apps]).
 	Apps *AppsPolicy `toml:"apps"`
+	// Secrets configures the on-demand secrets group ([host.secrets]).
+	Secrets *SecretsPolicy `toml:"secrets"`
 	// Ignore suppresses findings: "rule" or "rule:path-glob".
 	Ignore []string `toml:"ignore"`
 	// Strict makes warnings fail the run.

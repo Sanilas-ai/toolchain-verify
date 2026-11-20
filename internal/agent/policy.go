@@ -72,6 +72,13 @@ type Policy struct {
 	// even when they are marked conditional ("ban until fix", e.g. Flowise
 	// <=3.1.4 / CVE-2026-119978).
 	BanUnfixed *bool `toml:"ban_unfixed"`
+	// MCPDenylist adds package names (npm or PyPI, any version) that must
+	// never be launched as MCP servers, on top of the advisory blocklist.
+	MCPDenylist []string `toml:"mcp_denylist"`
+	// MCPReviewed, when set, is the list of reviewed MCP server package
+	// specs with exact versions ("@scope/pkg@1.2.3", "pkg==1.2.3"). Any
+	// npx/uvx/pipx-launched server not on it is reported.
+	MCPReviewed []string `toml:"mcp_reviewed"`
 	// HostInventory (default true) adds read-only host sources to the
 	// inventory: snap payloads, systemd unit ExecStart/WorkingDirectory and
 	// the local Docker/Podman Engine API (GET only: images, containers).

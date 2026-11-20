@@ -22,6 +22,21 @@ this project uses [SemVer](https://semver.org/).
     `ci.agent-untrusted-prompt` (AI agent on issue/comment/fork-PR triggers).
   - `models`: `require_allow = true` makes a reviewed SHA-256 manifest mandatory
     (`models.not-allowlisted`).
+- Threat-intel rules from the 2026-11-16 weekly plan:
+  - `host secrets` (new group, on demand, not in `host all`): `host.secret-file` (HF,
+    GitHub, AI-API, npm/PyPI tokens, exchange API keys, wallet seeds, git credentials in
+    well-known files; kind + redacted prefix only), `host.secret-env` (names only) and
+    `host.exchange-key-forbidden` (fail on hosts with `[host.secrets]
+    forbid_exchange_keys = true` or `--sandbox-host`).
+  - `host apps`: `host.chrome-cve-2026-125350` (Chrome/Chromium < 157.0.8103.50, KEV;
+    `--chrome-version`), `host.php-cve-2026-109618` (PHP < 8.2.35/8.3.36/8.4.27/8.5.12 or
+    EOL; `--php-version`), `host.path-user-writable` and `host.path-shadow` (`--path`),
+    `host.version-manager-tamper` (pyenv/rbenv/nodenv dispatcher or shim, Homebrew links),
+    `host.ide-extension-autoupdate`.
+  - `agent`: blocklist entries for fake MCP packages `karma365-mcp` (npm), `dynamic-mcp`,
+    `teamviewer-mcp-server`, `mcp-teamviewer` (PyPI); `mcp.blocklisted-package` matches MCP
+    launch commands against the blocklist and the new `mcp_denylist`; `mcp.not-reviewed`
+    enforces `mcp_reviewed` (exact reviewed specs).
 - Agent sandbox-isolation rules (`agent`): `agent.sandbox-approval-matrix`
   models the Codex `sandbox_mode` × `approval_policy` grid (danger-full-access
   + never = critical fail); `agent.no-isolation` flags Anthropic

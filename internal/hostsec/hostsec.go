@@ -24,6 +24,17 @@ type Options struct {
 	Apt, Net, Vps bool
 	// Apps selects the developer-workstation AI/IDE checks (opt-in).
 	Apps bool
+	// Secrets selects the on-demand token / key finder (never in "all").
+	Secrets bool
+	// Environ is the environment ("K=V") checked by the secrets group;
+	// only variable names are ever reported.
+	Environ []string
+	// PathEnv is $PATH for the apps PATH-order checks (optional).
+	PathEnv string
+	// ChromeVersion is the output of `google-chrome --version` (optional).
+	ChromeVersion []byte
+	// PHPVersion is the output of `php -v` (optional).
+	PHPVersion []byte
 	// VSCodeVersion is the output of `code --version` (optional).
 	VSCodeVersion []byte
 	// LlamaVersion is the output of `llama-server --version` (optional).
@@ -123,7 +134,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if !opt.Apt && !opt.Net && !opt.Vps && !opt.Apps {
+	if !opt.Apt && !opt.Net && !opt.Vps && !opt.Apps && !opt.Secrets {
 		opt.Apt, opt.Net = true, true
 	}
 	if opt.Now == nil {
@@ -149,7 +160,10 @@ func Run(p *Policy, opt Options) (*Report, error) {
 		checkVps(e, opt, p, rep, dpkg, c)
 	}
 	if opt.Apps {
-		checkApps(e, opt, p, c)
+		checkApps(e, opt, p, dpkg, c)
+	}
+	if opt.Secrets {
+		checkSecrets(e, opt, p.Secrets, c)
 	}
 	if len(opt.KeysBaseline) > 0 {
 		checkKeysBaseline(e, opt.KeysBaseline, c)
