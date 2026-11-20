@@ -4,7 +4,11 @@ All notable changes to toolchain-verify are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.1.5] — 2026-11-20
+
+Merged in this release: #20 (VPS host hardening), #21 and #22 (November 2026
+threat-intel rules), #23 (agent write rules) and #24 (session trace, posture,
+action pipeline, and scan tuning after the 2026-11-16 mass scan).
 
 ### Changed (scan tuning after the 2026-11-16 mass scan and manual review)
 - `ci.agent-publish-token` fires only when the job actually runs an agent:
@@ -163,6 +167,8 @@ this project uses [SemVer](https://semver.org/).
   probes and a NeMo Colang comparison stay research);
   agent tool update cooldown (~48 h) guidance; MCP governance gateways
   (ContextForge, Lunar MCPX, Agent Governance Toolkit, MCP-Defender) in the DESIGN backlog.
+
+[0.1.5]: https://github.com/Sanilas-ai/toolchain-verify/releases/tag/v0.1.5
 
 ## [0.1.4] — 2026-11-10
 
