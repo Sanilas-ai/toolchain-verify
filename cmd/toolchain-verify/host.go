@@ -34,7 +34,7 @@ func readInput(p string, stdin io.Reader) ([]byte, error) {
 
 func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var groups []string
-	isGroup := func(a string) bool { return a == "apt" || a == "net" || a == "vps" || a == "all" }
+	isGroup := func(a string) bool { return a == "apt" || a == "net" || a == "vps" || a == "apps" || a == "all" }
 	for len(args) > 0 && isGroup(args[0]) {
 		groups = append(groups, args[0])
 		args = args[1:]
@@ -52,6 +52,9 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	gitVersion := fs.String("git-version", "", "vps: file with `git --version` output (\"-\" = stdin); default: the dpkg git version")
 	nft := fs.String("nft", "", "vps: file with `sudo nft list ruleset` output (\"-\" = stdin)")
 	listenPolicy := fs.String("listen-policy", "", "vps: TOML file with `allowed = [\"22/tcp\", ...]` (or a [host.listen] section): ports that may listen outside loopback")
+	vscodeVersion := fs.String("vscode-version", "", "apps: file with `code --version` output (\"-\" = stdin); default: VS Code package.json files")
+	llamaVersion := fs.String("llama-version", "", "apps: file with `llama-server --version` output (\"-\" = stdin)")
+	keysBaseline := fs.String("authorized-keys-baseline", "", "authorized_keys-format file of the expected keys; any other authorized key fails (keys are never printed)")
 	strict := fs.Bool("strict", false, "warnings fail the run")
 	asJSON := fs.Bool("json", false, "print a JSON report")
 	verbose := fs.Bool("v", false, "verbose: also print info findings and fixes")
@@ -62,7 +65,7 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	for _, a := range fs.Args() {
 		if !isGroup(a) {
-			fmt.Fprintf(stderr, "error: unknown check group %q (want apt, net, vps or all)\n", a)
+			fmt.Fprintf(stderr, "error: unknown check group %q (want apt, net, vps, apps or all)\n", a)
 			return 2
 		}
 		groups = append(groups, a)
@@ -76,13 +79,13 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	stdinUsers := 0
-	for _, v := range []string{*ufwStatus, *ss, *sshdT, *timedatectl, *gitVersion, *nft} {
+	for _, v := range []string{*ufwStatus, *ss, *sshdT, *timedatectl, *gitVersion, *nft, *vscodeVersion, *llamaVersion, *keysBaseline} {
 		if v == "-" {
 			stdinUsers++
 		}
 	}
 	if stdinUsers > 1 {
-		fmt.Fprintln(stderr, "error: only one of --ufw-status, --ss, --sshd-t, --timedatectl, --git-version and --nft can read stdin")
+		fmt.Fprintln(stderr, "error: only one of --ufw-status, --ss, --sshd-t, --timedatectl, --git-version, --nft, --vscode-version, --llama-version and --authorized-keys-baseline can read stdin")
 		return 2
 	}
 	cwd, home := cwdHome()
@@ -100,8 +103,10 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			opt.Net = true
 		case "vps":
 			opt.Vps = true
+		case "apps":
+			opt.Apps = true
 		case "all":
-			opt.Apt, opt.Net, opt.Vps = true, true, true
+			opt.Apt, opt.Net, opt.Vps, opt.Apps = true, true, true, true
 		}
 	}
 	if opt.UfwStatus, err = readInput(*ufwStatus, stdin); err != nil {
@@ -115,7 +120,7 @@ func cmdHost(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	for _, in := range []struct {
 		name string
 		dst  *[]byte
-	}{{*sshdT, &opt.SshdT}, {*timedatectl, &opt.Timedatectl}, {*gitVersion, &opt.GitVersion}, {*nft, &opt.Nft}} {
+	}{{*sshdT, &opt.SshdT}, {*timedatectl, &opt.Timedatectl}, {*gitVersion, &opt.GitVersion}, {*nft, &opt.Nft}, {*vscodeVersion, &opt.VSCodeVersion}, {*llamaVersion, &opt.LlamaVersion}, {*keysBaseline, &opt.KeysBaseline}} {
 		if *in.dst, err = readInput(in.name, stdin); err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 2

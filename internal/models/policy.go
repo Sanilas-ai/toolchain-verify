@@ -41,9 +41,14 @@ type Policy struct {
 	ScannerTimeout string   `toml:"scanner_timeout"` // default "120s"
 	// Allow lists reviewed artifacts. With a literal path it is also a pin:
 	// a different digest at that path fails.
-	Allow  []Allow  `toml:"allow"`
-	Ignore []string `toml:"ignore"`
-	Ollama *Ollama  `toml:"ollama"`
+	Allow []Allow `toml:"allow"`
+	// RequireAllow fails every model artifact found under Roots whose
+	// SHA-256 is not in Allow (a reviewed hash manifest is required before
+	// a model is run; poisoned post-training weights look like any other
+	// file). Forces hashing.
+	RequireAllow bool     `toml:"require_allow"`
+	Ignore       []string `toml:"ignore"`
+	Ollama       *Ollama  `toml:"ollama"`
 
 	timeout time.Duration
 }

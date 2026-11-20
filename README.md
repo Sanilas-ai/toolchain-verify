@@ -315,6 +315,13 @@ Findings now carry a `cwe` list in JSON (printed with `-v`). Step-by-step checkl
 fresh VPS, including a note on vanilla WireGuard behind DPI:
 [docs/vps-fresh-image-checklist.md](docs/vps-fresh-image-checklist.md).
 
+**Workstation AI/IDE apps (`host apps`).** VS Code < 1.145.3 (CVE-2026-120779), llama.cpp
+`llama-server` < b12340 (`--llama-version`), denylisted IDE extensions (trojanized
+`anthropic.claude-code` 2.1.312/2.1.313 and `[host.apps] extension_denylist`), the
+`svc-telemetry` IoC key, and with `--authorized-keys-baseline FILE` any authorized key that
+is not in the baseline. Details and the wfx-loot runbook:
+[docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md).
+
 Configure with `[host]`, `[host.apt]`, `[host.net]` and `[[host.kernel_floor]]` (see
 [examples/host-hp.toml](examples/host-hp.toml)). Build the binary in the sandbox and run
 it on the host: the sandbox cannot see the host's packages, sockets or firewall.
@@ -652,6 +659,13 @@ fail; исправление: `rm /etc/ssh/ssh_host_*; ssh-keygen -A`), `host.ss
 У каждой находки в JSON есть список `cwe`. Пошаговый чеклист для свежего VPS и рекомендация
 не полагаться на ванильный WireGuard на пути с DPI:
 [docs/vps-fresh-image-checklist.md](docs/vps-fresh-image-checklist.md).
+
+**ИИ- и IDE-софт рабочей станции (`host apps`).** VS Code < 1.145.3 (CVE-2026-120779),
+`llama-server` < b12340 (`--llama-version`), расширения из денайлиста (троянские
+`anthropic.claude-code` 2.1.312/2.1.313 и `[host.apps] extension_denylist`), IoC-ключ
+`svc-telemetry`, а с `--authorized-keys-baseline FILE` любой ключ вне эталона (ключи и
+отпечатки не печатаются). Подробности и чеклист по wfx-loot:
+[docs/threat-intel-2026-11.md](docs/threat-intel-2026-11.md).
 
 Бинарник собирается в песочнице, а запускается на хосте: из песочницы не видно пакеты,
 сокеты и firewall хоста.

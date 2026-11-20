@@ -47,6 +47,9 @@ type mcpServer struct {
 	autoApprove []string
 	trust       bool
 	disabled    bool
+	// authCfg: the entry configures client auth (oauth / bearer / auth
+	// provider), so the server is not reached by name only.
+	authCfg bool
 }
 
 func checkMCP(r *resolved, c *collector, found []foundConfig) []ExecSurface {
@@ -229,6 +232,11 @@ func toServer(name string, m map[string]any) mcpServer {
 	}
 	s.trust, _ = m["trust"].(bool)
 	s.disabled, _ = m["disabled"].(bool)
+	for _, k := range []string{"oauth", "auth", "authorization", "authProviderType", "bearer_token", "bearerToken", "bearer_token_env_var", "token", "apiKey", "api_key"} {
+		if v, ok := m[k]; ok && v != nil && v != false && v != "" {
+			s.authCfg = true
+		}
+	}
 	if en, ok := m["enabled"].(bool); ok && !en {
 		s.disabled = true
 	}
@@ -317,6 +325,11 @@ func auditServer(r *resolved, c *collector, path string, s mcpServer) []ExecSurf
 			remote = true
 			c.add(Finding{Rule: "mcp.remote", Severity: SevInfo, Path: path,
 				Message: fmt.Sprintf("%s: remote MCP server %s; its tool descriptions are untrusted input (tool poisoning / rug-pull)", id, u.Host)})
+			if !s.authCfg && !hasAuthHeader(s.headers) {
+				c.add(Finding{Rule: "mcp.remote-no-auth", Severity: SevWarn, Path: path,
+					Message: fmt.Sprintf("%s: remote MCP server %s is configured without any client authentication (no Authorization/API-key header, no OAuth); agent and server identity rest on a name and a URL only (BluePhishing-style impersonation)", id, u.Host),
+					Fix:     "use an endpoint that requires OAuth 2.1 / a bearer token passed from the environment, and prefer short-lived, narrowly scoped tokens; for agent-to-agent endpoints require signed requests, not a self-declared agent name"})
+			}
 		}
 	}
 	all := s.trust
@@ -591,4 +604,15 @@ func stripJSONC(b []byte) []byte {
 		res = append(res, ch)
 	}
 	return res
+}
+
+var authHeaderRe = regexp.MustCompile(`(?i)^(authorization|proxy-authorization|x-api-key|api-key|x-auth-token|.*token.*|.*api[-_]?key.*)$`)
+
+func hasAuthHeader(h map[string]string) bool {
+	for k, v := range h {
+		if authHeaderRe.MatchString(k) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
 }

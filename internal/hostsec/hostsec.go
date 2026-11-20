@@ -22,6 +22,15 @@ type Options struct {
 	// Apt and Net select the check groups (both when no group is set).
 	// Vps selects the internet-facing server profile (opt-in).
 	Apt, Net, Vps bool
+	// Apps selects the developer-workstation AI/IDE checks (opt-in).
+	Apps bool
+	// VSCodeVersion is the output of `code --version` (optional).
+	VSCodeVersion []byte
+	// LlamaVersion is the output of `llama-server --version` (optional).
+	LlamaVersion []byte
+	// KeysBaseline is an authorized_keys-format file of the expected keys;
+	// when set, every other authorized key fails (any group).
+	KeysBaseline []byte
 	// SshdT is the output of `sudo sshd -T` (optional; sshd_config and its
 	// Include drop-ins are evaluated otherwise).
 	SshdT []byte
@@ -114,7 +123,7 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if !opt.Apt && !opt.Net && !opt.Vps {
+	if !opt.Apt && !opt.Net && !opt.Vps && !opt.Apps {
 		opt.Apt, opt.Net = true, true
 	}
 	if opt.Now == nil {
@@ -138,6 +147,12 @@ func Run(p *Policy, opt Options) (*Report, error) {
 	}
 	if opt.Vps {
 		checkVps(e, opt, p, rep, dpkg, c)
+	}
+	if opt.Apps {
+		checkApps(e, opt, p, c)
+	}
+	if len(opt.KeysBaseline) > 0 {
+		checkKeysBaseline(e, opt.KeysBaseline, c)
 	}
 	rep.Findings = c.Sorted()
 	rep.Ignored = c.Ignored
